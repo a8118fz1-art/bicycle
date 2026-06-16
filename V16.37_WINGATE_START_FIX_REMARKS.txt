@@ -1,0 +1,27 @@
+V16.37_WINGATE_START_FIX
+
+Scope:
+- app.js was not modified.
+- 3-STEP finalized flow was not modified.
+- Intermittent finalized flow was not modified.
+- Only ui.js and index.html were updated for Wingate START behavior and result rendering.
+
+Fix:
+- Replaced static Wingate START timeout with a real Wingate test flow in ui.js.
+- START now applies Body Weight x 7.5% KP and runs a 30-second test timer.
+- During the 30 seconds, valid RPM samples are collected from correctedRpm.
+- Watt calculation: watt = kp x rpm x 0.98.
+- After 30 seconds, output is stopped and the app jumps to Wingate result page.
+- Result page now uses actual collected data instead of static sample values.
+
+Result output:
+- Load KP
+- Valid sample count
+- Peak Power
+- Average Power
+- Fatigue Index
+- Power curve per second
+
+Protection:
+- RPM below 20 is treated as invalid.
+- If no valid RPM exists, result page shows no-data status instead of fake values.

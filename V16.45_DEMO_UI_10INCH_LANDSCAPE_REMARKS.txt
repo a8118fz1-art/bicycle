@@ -1,0 +1,28 @@
+V16.45 DEMO UI 10.1 INCH LANDSCAPE OPTIMIZATION
+
+Base version:
+- V16.44_STOP_SOFT_3STEP_TESTED_RANGE_FIX
+
+Target device:
+- 10.1 inch landscape display
+- 1280 x 800 resolution
+
+Scope:
+- UI display optimization only
+- app.js was not modified
+- Control logic was not modified
+
+Modified files:
+- style.css only
+
+Main UI adjustments:
+1. Added a dedicated desktop/DEMO landscape media query for 901px+ width and <=850px height.
+2. Optimized 1280 x 800 full-page display to reduce vertical scrolling.
+3. Reduced header, metric card, adjustment panel, button, result card, chart, and test menu heights for DEMO display.
+4. Preserved the existing responsive mobile CSS for non-DEMO devices.
+5. Free Ride / ERG / Test Mode / 3-Step / Wingate / Intermittent pages remain functionally unchanged.
+
+Important restriction followed:
+- app.js unchanged
+- No FTMS control logic changed
+- No STOP / KP / ERG / 3-Step calculation logic changed

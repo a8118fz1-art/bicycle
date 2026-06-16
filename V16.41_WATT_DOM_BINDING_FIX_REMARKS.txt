@@ -1,0 +1,16 @@
+V16.41_WATT_DOM_BINDING_FIX
+
+Scope:
+- app.js not modified.
+- FTMS parsing/control logic not modified.
+- 3-STEP logic not modified.
+- Only Intermittent/Wingate Watt display and result sampling source were corrected.
+
+Fixes:
+1. Added getCurrentWattNumber() in ui.js to read the final Watt DOM value from #wattText.
+2. Intermittent live display now shows WATT instead of AVG WATT.
+3. Intermittent live WATT now uses #wattText final display value.
+4. Intermittent 5 sec sprint AVG WATT now averages #wattText samples collected during sprint only.
+5. Wingate live WATT now uses #wattText final display value.
+6. Wingate per-second result is now built from #wattText samples, grouped per second.
+7. Kept RPM sampling and KP command flow unchanged.

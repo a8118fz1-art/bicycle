@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+  <title>EMS FTMS V16.33 3STEP FLOW FIX</title>
+  <link rel="stylesheet" href="./style.css?v=16.31-responsive-ui-proto"/>
+</head>
+<body>
+<div id="app" class="app">
+
+  <!-- HOME -->
+  <section class="page active" id="pageHome">
+    <div class="top-row home-top">
+      <div class="profile-card">
+        <div class="avatar"></div>
+        <div><b>User</b><span>Welcome back!</span></div>
+      </div>
+      <div class="home-icons">
+        <button class="circle-btn">⌁<span>WiFi</span></button>
+        <button id="connectBtn" class="circle-btn ble">⌁<span>BLE</span></button>
+        <button id="uartBtn" class="circle-btn" data-page="uartTest">⚙<span>UART</span></button>
+      </div>
+      <div class="home-status-card" id="homeConnectionPanel">
+        <div class="status-icon" id="homeConnectionIcon">i</div>
+        <div><span id="homeConnectionTitle">Connection</span><b id="homeConnectionText">Tap BLE to connect</b></div>
+      </div>
+    </div>
+
+    <div class="home-menu">
+      <button class="mode-tile" data-page="freeRide"><span class="tile-icon">♙</span><b>FREE RIDE</b><small>自由訓練模式</small><em>›</em></button>
+      <button class="mode-tile" data-page="erg"><span class="tile-icon">◎</span><b>ERG MODE</b><small>功率控制模式</small><em>›</em></button>
+      <button class="mode-tile" data-page="testMode"><span class="tile-icon">▤</span><b>TEST MODE</b><small>測試模式</small><em>›</em></button>
+    </div>
+    <footer class="footer"><span>◷ 11:40</span><span>♨ 25°C</span><span>Ver. 16.30</span></footer>
+  </section>
+
+  <!-- UART TEST -->
+  <section class="page" id="pageUartTest">
+    <header><button class="back-btn" data-page="home">←</button><h1>UART TEST</h1><button class="profile-mini">PROFILE</button></header>
+    <p class="uart-note">此頁面用於監視下控裝置送上來的 UART 資料，同時可手動開啟串口、調整參數與送出測試封包。選單切換會直接導到 UART TEST 頁面，設定可按「SAVE SETTINGS」儲存。</p>
+    <div class="uart-config">
+      <label>Baud Rate
+        <select id="uartBaudRate"><option>9600</option><option selected>19200</option><option>38400</option><option>57600</option><option>115200</option><option>230400</option></select>
+      </label>
+      <label>Data Bits
+        <select id="uartDataBits"><option>7</option><option selected>8</option></select>
+      </label>
+      <label>Parity
+        <select id="uartParity"><option value="none" selected>NONE</option><option value="even">EVEN</option><option value="odd">ODD</option></select>
+      </label>
+      <label>Stop Bits
+        <select id="uartStopBits"><option selected>1</option><option>2</option></select>
+      </label>
+    </div>
+    <div class="uart-panel">
+      <h3>UART Validation</h3>
+      <div class="uart-row">
+        <button id="openSerialBtn">OPEN UART PORT</button>
+        <button id="closeSerialBtn">CLOSE UART PORT</button>
+        <button id="sendUartPortBtn">SEND TEST PACKET</button>
+        <button id="saveUartSettingsBtn">SAVE SETTINGS</button>
+      </div>
+      <div class="uart-status">
+        <span>Status:<b id="uartPortStatus">idle</b></span>
+        <span>Last TX:<b id="uartLastTx">--</b></span>
+        <span>Last RX:<b id="uartLastRx">--</b></span>
+      </div>
+      <pre id="serialLog" class="uart-log" aria-live="polite"></pre>
+    </div>
+    <footer class="footer"><span>◷ 11:40</span><span>♨ 25°C</span><span>Ver. 16.30</span></footer>
+  </section>
+
+  <!-- FREE RIDE -->
+  <section class="page" id="pageFreeRide">
+    <header><button class="back-btn" data-page="home">←</button><h1>FREE RIDE</h1><button class="profile-mini">PROFILE</button></header>
+    <div class="metric-row four">
+      <div class="metric"><i>◴</i><label>RPM</label><b id="freeRpmView">--</b><small>rpm</small></div>
+      <div class="metric"><i>ϟ</i><label>WATT</label><b id="freeWattView">--</b><small>watt</small></div>
+      <div class="metric"><i>◷</i><label>TIME</label><b id="freeTimeView">00:00</b><small>min:sec</small></div>
+      <div class="metric"><i>⌁</i><label>DISTANCE</label><b id="freeDistanceView">0.00</b><small>km</small></div>
+    </div>
+
+    <div class="adjust-panel">
+      <button id="kpMinus" class="adjust-btn">−</button>
+      <div class="bar left-bars"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+      <div class="center-value"><label>RESISTANCE LEVEL</label><b id="kpMirror">5.0 <em>KP</em></b><small>(0.1 KP STEP)</small></div>
+      <div class="bar right-bars"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+      <button id="kpPlus" class="adjust-btn">＋</button>
+    </div>
+
+    <div class="action-row small-action">
+      <button id="sendKpBtn" class="primary-action">↪ ENTER</button>
+      <button id="stopOutputBtn" class="stop-action">✋ STOP</button>
+    </div>
+  </section>
+
+  <!-- ERG -->
+  <section class="page" id="pageErg">
+    <header><button class="back-btn" data-page="home">←</button><h1>ERG MODE</h1><button class="profile-mini">PROFILE</button></header>
+    <div class="metric-row five">
+      <div class="metric"><i>◴</i><label>RPM</label><b id="ergRpmView">--</b><small>rpm</small></div>
+      <div class="metric"><i>◷</i><label>TIME</label><b id="ergTimeView">--:--</b><small>min:sec</small></div>
+      <div class="metric"><i>⌁</i><label>DISTANCE</label><b id="ergDistanceView">--.--</b><small>km</small></div>
+      <div class="metric"><i>ϟ</i><label>WATT</label><b id="ergWattView">--</b><small>watt</small></div>
+      <div class="metric target"><label>TARGET WATT</label><b id="ergTargetView">100</b><small>watt</small></div>
+    </div>
+
+    <div class="adjust-panel target-watt-panel">
+      <button id="wMinus" class="adjust-btn">−</button>
+      <div class="bar left-bars"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+      <div class="center-value"><label>TARGET WATT</label><b id="targetWattMirror">100 <em>watt</em></b><small>(5 W STEP)</small></div>
+      <div class="bar right-bars"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+      <button id="wPlus" class="adjust-btn">＋</button>
+    </div>
+
+    <div class="action-row small-action">
+      <button id="sendWattBtn" class="primary-action">↪ ENTER</button>
+      <button class="stop-action mirror-stop">✋ STOP</button>
+    </div>
+  </section>
+
+  <!-- TEST MODE -->
+  <section class="page" id="pageTestMode">
+    <header><button class="back-btn" data-page="home">←</button><h1>TEST MODE</h1><button class="profile-mini">PROFILE</button></header>
+    <div class="test-menu">
+      <button data-page="threeStep"><span>3</span><b>3-STEP</b><small>無氧測試</small><em>›</em></button>
+      <button data-page="wingate"><span>30</span><b>WINGATE</b><small>30秒測試</small><em>›</em></button>
+      <button data-page="intermittent"><span>▥</span><b>INTERMITTENT</b><small>5秒 × 10回</small><em>›</em></button>
+    </div>
+    <footer class="footer"><span>◷ 11:40</span><span>♨ 25°C</span><span>Ver. 16.30</span></footer>
+  </section>
+
+  <!-- 3 STEP SETUP -->
+  <section class="page" id="pageThreeStep">
+    <header><button class="back-btn" data-page="testMode">←</button><h1>3-STEP TEST</h1><button class="profile-mini">PROFILE</button></header>
+    <div class="stepper-line" id="threeStepIndicator"><div id="stepIndicator1" class="active"><b>1</b><span>STEP 1</span><small>Basic Information</small></div><div id="stepIndicator2"><b>2</b><span>STEP 2</span><small>Test Settings</small></div><div id="stepIndicator3"><b>3</b><span>STEP 3</span><small>Start Test</small></div></div>
+
+    <div class="panel">
+      <h2>BASIC INFORMATION</h2>
+      <div class="info-grid">
+        <div class="info-card"><label>GENDER</label><div class="gender-buttons"><button class="active" id="genderMale">♂ MALE</button><button id="genderFemale">♀ FEMALE</button></div></div>
+        <div class="info-card"><label>WEIGHT</label><b id="bodyWeightMirror">70</b><small>kg</small><div class="mini-controls"><button class="weightMinus">−</button><button class="weightPlus">＋</button></div></div>
+        <div class="info-card"><label>AGE</label><b id="ageMirror">25</b><small>years</small><div class="mini-controls"><button class="ageMinus">−</button><button class="agePlus">＋</button></div></div>
+      </div>
+    </div>
+
+    <button id="start3Step" class="wide-start">ENTER</button>
+
+    <div class="panel param-panel">
+      <h2>INPUT TEST PARAMETERS</h2>
+      <div class="param-grid">
+        <div><label>KP</label><b id="stepParamKp">--</b><small>kp</small></div>
+        <div><label>RPM</label><b id="stepParamRpm">--</b><small>rpm</small></div>
+        <div><label>TIME</label><b id="stepParamTime">10</b><small>sec</small></div>
+        <div><label>MAX RPM</label><b id="stepParamMaxRpm">--</b><small>rpm</small></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 STEP RESULT -->
+  <section class="page" id="pageThreeStepResult">
+    <header><button class="back-btn" data-page="testMode">←</button><h1>3-STEP TEST RESULT</h1><button class="profile-mini">PROFILE</button></header>
+    <div class="result-hero">
+      <div class="hero-icon">⌁</div>
+      <div><label>MAX ANAEROBIC POWER</label><b id="threeStepMaxPower">-- <em>watt</em></b><small id="threeStepMaxPowerKp">Waiting for valid RPM data</small></div>
+    </div>
+    <div class="result-cards five" id="threeStepResultCards">
+      <div><label>RESULT 1</label><b id="threeStepR1">--</b><small>rpm</small></div>
+      <div><label>RESULT 2</label><b id="threeStepR2">--</b><small>rpm</small></div>
+      <div><label>RESULT 3</label><b id="threeStepR3">--</b><small>rpm</small></div>
+      <div><label>FORMULA</label><b id="threeStepFormula">--</b><small>rpm = a × kp + b</small></div>
+      <div><label>STATUS</label><b id="threeStepCalcStatus">--</b><small>actual data only</small></div>
+    </div>
+    <div class="chart-grid two">
+      <div class="chart-card">
+        <h2>RPM vs KP <small>(Regression Line)</small></h2>
+        <svg id="threeStepRpmChart" viewBox="0 0 520 300" class="chart-svg">
+          <text x="160" y="150">No valid RPM data</text>
+          <text x="18" y="35">rpm</text><text x="480" y="275">kp</text>
+        </svg>
+      </div>
+      <div class="chart-card">
+        <h2>POWER CURVE <small>(ENERGY EFFICIENCY INDEX)</small></h2>
+        <p>watt = kp × rpm × 0.98<br>(Calculated every 0.1 kp up to 13.0 kp)</p>
+        <svg id="threeStepPowerChart" viewBox="0 0 520 300" class="chart-svg">
+          <text x="160" y="150">No valid RPM data</text>
+          <text x="18" y="35">watt</text><text x="480" y="275">kp</text>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- WINGATE -->
+  <section class="page" id="pageWingate">
+    <header><button class="back-btn" data-page="testMode">←</button><h1>WINGATE TEST</h1><button class="profile-mini">PROFILE</button></header>
+    <div class="panel wingate-setup">
+      <div class="formula-row">
+        <label>BODY WEIGHT:</label><input id="wingateWeight" value="70.0" inputmode="decimal"/><span>kg</span>
+        <button id="startWingate" class="inline-start">START</button>
+      </div>
+      <div class="formula-row">
+        <label>LOAD (kp):</label><b id="wingateLoad">5.3</b><span>kp</span>
+        <small>= Body Weight × 7.5%<br>(calculated to 0.1 kp)</small>
+      </div>
+    </div>
+    <div class="result-cards five">
+      <div><label>LOAD (kp)</label><b id="wingateLoadCard">5.3</b><small>kp</small></div>
+      <div><label>TEST TIME</label><b id="wingateTimeView">--</b><small>sec</small></div>
+      <div><label>CURRENT RPM</label><b id="wingateRpmView">--</b><small>rpm</small></div>
+      <div><label>CURRENT POWER</label><b id="wingateWattView">--</b><small>watt</small></div>
+      <div class="orange"><label>STATUS</label><b id="wingateStateView">READY</b><small>30 sec</small></div>
+    </div>
+    <div class="note-panel">
+      <span>• Test time = 30 sec all-out pedaling</span>
+      <span>• Watt uses validated live display source</span>
+      <span>• Load = Body Weight × 7.5%</span>
+    </div>
+  </section>
+
+  <!-- WINGATE RESULT -->
+  <section class="page" id="pageWingateResult">
+    <header><button class="back-btn" data-page="wingate">←</button><h1>WINGATE TEST RESULT</h1><button class="profile-mini">PROFILE</button></header>
+    <div class="result-cards five">
+      <div><label>LOAD (kp)</label><b id="wingateResultKp">--</b><small>kp</small></div>
+      <div><label>VALID SAMPLES</label><b id="wingateSampleCount">--</b><small>sec</small></div>
+      <div><label>PEAK POWER</label><b id="wingatePeakPower">--</b><small>watt</small></div>
+      <div><label>AVERAGE POWER</label><b id="wingateAveragePower">--</b><small>watt</small></div>
+      <div class="orange"><label>FATIGUE INDEX</label><b id="wingateFatigueIndex">--</b><small>%</small></div>
+    </div>
+    <div class="chart-card full">
+      <h2>POWER OUTPUT (WATT) PER SECOND</h2>
+      <svg id="wingatePowerChart" viewBox="0 0 1100 430" class="chart-svg wide">
+        <text x="430" y="215">No valid RPM data</text>
+        <text x="8" y="220" transform="rotate(-90 8,220)">POWER (WATT)</text><text x="520" y="405">SECONDS</text>
+      </svg>
+    </div>
+  </section>
+
+  <!-- INTERMITTENT TEST -->
+  <section class="page" id="pageIntermittent">
+    <header><button class="back-btn" data-page="testMode">←</button><h1>INTERMITTENT TEST</h1><button class="profile-mini">PROFILE</button></header>
+    <div class="panel wingate-setup intermittent-setup">
+      <div class="formula-row">
+        <label>BODY WEIGHT:</label><input id="interWeight" value="70.0" inputmode="decimal"/><span>kg</span>
+        <button id="startIntermittent" class="inline-start">START</button>
+      </div>
+      <div class="formula-row">
+        <label>LOAD (KP):</label><b id="interKp">5.3</b><span>kp</span>
+        <small>= Body Weight × 7.5%<br>Work 5 sec + Rest 20 sec × 10 rounds</small>
+      </div>
+    </div>
+    <div class="metric-row five intermittent-live">
+      <div class="metric"><label>ROUND</label><b id="interRoundView">--</b><small>/ 10</small></div>
+      <div class="metric"><label>PHASE</label><b id="interPhaseView">READY</b><small>WORK / REST</small></div>
+      <div class="metric"><label>TIME</label><b id="interTimeView">--</b><small>sec</small></div>
+      <div class="metric"><label>RPM</label><b id="interRpmView">--</b><small>rpm</small></div>
+      <div class="metric target"><label>WATT</label><b id="interWattView">--</b><small>watt</small></div>
+    </div>
+    <div class="round-row">
+      <div><label>WORK</label><b>5</b><span>sec</span></div>
+      <div><label>REST</label><b>20</b><span>sec</span></div>
+    </div>
+    <div class="data-table">
+      <h2>DATA <small>(Average RPM during each 5 sec sprint only)</small></h2>
+      <table><thead><tr><th>ROUND</th><th>KP</th><th>AVG RPM</th><th>AVG WATT</th><th>SAMPLES</th></tr></thead>
+      <tbody id="interDataBody">
+        <tr><td>1</td><td>--</td><td>--</td><td>--</td><td>--</td></tr>
+        <tr><td>2</td><td>--</td><td>--</td><td>--</td><td>--</td></tr>
+        <tr><td>3</td><td>--</td><td>--</td><td>--</td><td>--</td></tr>
+        <tr><td>4</td><td>--</td><td>--</td><td>--</td><td>--</td></tr>
+        <tr><td>5</td><td>--</td><td>--</td><td>--</td><td>--</td></tr>
+        <tr><td>6</td><td>--</td><td>--</td><td>--</td><td>--</td></tr>
+        <tr><td>7</td><td>--</td><td>--</td><td>--</td><td>--</td></tr>
+        <tr><td>8</td><td>--</td><td>--</td><td>--</td><td>--</td></tr>
+        <tr><td>9</td><td>--</td><td>--</td><td>--</td><td>--</td></tr>
+        <tr><td>10</td><td>--</td><td>--</td><td>--</td><td>--</td></tr>
+      </tbody></table>
+    </div>
+  </section>
+
+  <!-- INTERMITTENT RESULT -->
+  <section class="page" id="pageIntermittentResult">
+    <header><button class="back-btn" data-page="intermittent">←</button><h1>INTERMITTENT TEST RESULT</h1><button class="profile-mini">PROFILE</button></header>
+    <div class="summary-row">
+      <div><label>LOAD</label><b id="interResultKp">--</b><small>KP</small></div>
+      <div><label>PEAK POWER</label><b id="interPeakPower">--</b><small>WATT</small></div>
+      <div><label>AVERAGE POWER</label><b id="interAveragePower">--</b><small>WATT</small></div>
+      <div><label>LOWEST POWER</label><b id="interLowestPower">--</b><small>WATT</small></div>
+      <div><label>STATUS</label><b id="interResultStatus">--</b><small>actual data only</small></div>
+    </div>
+    <div class="chart-card full intermittent-result-chart">
+      <h2>AVERAGE POWER PER ROUND <small>(5 sec sprint actual watt average)</small></h2>
+      <div class="bar-chart" id="interBarChart">
+        <div style="--h:0"><b>--</b><span>1</span></div><div style="--h:0"><b>--</b><span>2</span></div>
+        <div style="--h:0"><b>--</b><span>3</span></div><div style="--h:0"><b>--</b><span>4</span></div>
+        <div style="--h:0"><b>--</b><span>5</span></div><div style="--h:0"><b>--</b><span>6</span></div>
+        <div style="--h:0"><b>--</b><span>7</span></div><div style="--h:0"><b>--</b><span>8</span></div>
+        <div style="--h:0"><b>--</b><span>9</span></div><div style="--h:0"><b>--</b><span>10</span></div>
+      </div>
+      <p class="axis">Y-axis: Average Power (WATT) / X-axis: Round</p>
+    </div>
+  </section>
+
+  <!-- Required hidden app.js source/control elements. Do not remove. -->
+  <section class="source-hidden" aria-hidden="true">
+    <div id="status">Ready.</div>
+    <b id="deviceName">--</b>
+    <b id="controlStatus">--</b>
+    <b id="correctedRpm">--</b>
+    <b id="wattText">--</b>
+    <!-- UART / Serial controls for validation -->
+    <b id="phase">--</b>
+    <b id="timer">--</b>
+    <b id="armedStatus">NO</b>
+    <b id="modeStatus">--</b>
+    <b id="rawRpm">--</b>
+    <b id="rawHex">--</b>
+    <b id="flagsText">--</b>
+    <b id="speedText">--</b>
+    <b id="cadenceText">--</b>
+    <b id="resistanceText">--</b>
+    <b id="powerText">--</b>
+    <button id="disconnectBtn">disconnect</button>
+    <button id="stopTest">stop test</button>
+    <button id="kpModeBtn">KP</button>
+    <button id="ergModeBtn">ERG</button>
+    <div id="kpPanel"></div>
+    <div id="ergPanel" class="hidden"></div>
+    <input id="targetKp" type="number" value="5.0" step="0.1" min="0.1" max="14"/>
+    <input id="targetWatt" type="number" value="100" step="5"/>
+    <b id="threeStepState">READY</b>
+    <pre id="log"></pre>
+  </section>
+</div>
+
+<script src="./app.js?v=16.21-only-rpm-fix"></script>
+<script src="./ui.js?v=16.33-3step-flow-fix"></script>
+</body>
+</html>

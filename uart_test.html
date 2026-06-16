@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>UART Manual Test</title>
+  <link rel="stylesheet" href="./style.css" />
+  <style>
+    body{padding:18px;font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans',"Helvetica Neue",Arial}
+    .card{background:#fff;border-radius:8px;padding:12px;box-shadow:0 1px 4px rgba(0,0,0,0.08);max-width:860px}
+    label{display:block;margin-top:8px;font-weight:600}
+    input[type=text]{width:100%;padding:8px;margin-top:6px;border:1px solid #ddd;border-radius:6px}
+    pre#log{background:#111;color:#bada55;padding:8px;border-radius:6px;max-height:320px;overflow:auto}
+    .row{display:flex;gap:8px}
+    .row > *{flex:1}
+    button{padding:8px 12px;border-radius:6px;border:1px solid #bbb;background:#f6f6f6}
+  </style>
+</head>
+<body>
+  <h1>UART Manual Test</h1>
+  <div class="card">
+    <label>CMD (hex) — 1 byte, e.g. <em>10</em></label>
+    <input id="cmdInput" type="text" placeholder="10" value="10" />
+
+    <label>DATA (hex bytes, space separated) — e.g. <em>01 FA 00</em></label>
+    <input id="dataInput" type="text" placeholder="01 FA 00" value="01 FA 00" />
+
+    <div style="margin-top:10px" class="row">
+      <button id="buildBtn">Build Packet</button>
+      <button id="openBtn">Open UART Port</button>
+      <button id="closeBtn">Close Port</button>
+      <button id="sendBtn">Send</button>
+    </div>
+
+    <label>Built Packet (hex)</label>
+    <pre id="packetView">--</pre>
+
+    <label>Serial Log</label>
+    <pre id="log">--</pre>
+  </div>
+
+  <script>
+    function parseHexBytes(s){
+      if(!s) return [];
+      return s.trim().split(/\s+/).map(x=>parseInt(x,16)&0xFF);
+    }
+    function crc16ccitt(bytes){let crc=0xFFFF;for(const b of bytes){crc^=(b<<8);for(let i=0;i<8;i++){if(crc&0x8000){crc=((crc<<1)^0x1021)&0xFFFF;}else{crc=(crc<<1)&0xFFFF;}}}return crc}
+    function buildUartPacket(cmd,data=[]){const payload=[1+data.length,cmd,...data];const crc=crc16ccitt(payload);return Uint8Array.from([0x55,0xAA,...payload,crc&0xFF,crc>>8,0x0D])}
+    function toHex(a){return Array.from(a).map(b=>b.toString(16).padStart(2,'0')).join(' ')}
+
+    let port=null, reader=null, writer=null;
+
+    async function openPort(){
+      if(!navigator.serial){appendLog('Web Serial API not supported');return}
+      try{
+        port = await navigator.serial.requestPort();
+        await port.open({baudRate:19200,dataBits:8,stopBits:1,parity:'none'});
+        writer = port.writable.getWriter();
+        appendLog('Port opened');
+        readLoop();
+      }catch(e){appendLog('Open failed: '+e.message)}
+    }
+    async function closePort(){
+      try{ if(reader){await reader.cancel(); reader.releaseLock(); reader=null} if(writer){writer.releaseLock(); writer=null} if(port){await port.close(); port=null} appendLog('Port closed')}catch(e){appendLog('Close failed: '+e.message)}
+    }
+    async function sendPacket(pkt){
+      if(!port || !writer){appendLog('Port not open');return}
+      try{ await writer.write(pkt); appendLog('TX: '+toHex(pkt)); }catch(e){appendLog('Write err: '+e.message)}
+    }
+    async function readLoop(){
+      if(!port || !port.readable) return; reader = port.readable.getReader();
+      try{ while(true){ const {value,done} = await reader.read(); if(done) break; if(value && value.length){ appendLog('RX: '+toHex(value)); } } }catch(e){appendLog('Read err: '+e.message)} finally{ try{reader.releaseLock()}catch(e){} reader=null }
+    }
+    function appendLog(t){const p=document.getElementById('log'); p.textContent=`[${new Date().toLocaleTimeString()}] ${t}\n`+p.textContent}
+
+    document.getElementById('buildBtn').onclick = ()=>{
+      const cmd = parseInt(document.getElementById('cmdInput').value.trim(),16)||0;
+      const data = parseHexBytes(document.getElementById('dataInput').value);
+      const pkt = buildUartPacket(cmd,data);
+      document.getElementById('packetView').textContent = toHex(pkt);
+    }
+    document.getElementById('openBtn').onclick = openPort;
+    document.getElementById('closeBtn').onclick = closePort;
+    document.getElementById('sendBtn').onclick = async ()=>{
+      const cmd = parseInt(document.getElementById('cmdInput').value.trim(),16)||0;
+      const data = parseHexBytes(document.getElementById('dataInput').value);
+      const pkt = buildUartPacket(cmd,data);
+      document.getElementById('packetView').textContent = toHex(pkt);
+      await sendPacket(pkt);
+    }
+  </script>
+</body>
+</html>

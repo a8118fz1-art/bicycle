@@ -1,0 +1,23 @@
+V16.39_INTER_WINGATE_WATT_CALC_FIX
+
+Scope:
+- app.js not modified.
+- FTMS base connection / parsing / control point logic not modified.
+- Finalized 3-STEP flow and calculation not modified.
+- Only ui.js calculation handling for Intermittent / Wingate result statistics was adjusted.
+
+Fix details:
+1. Intermittent Test
+- Confirmed calculation sequence is now explicit:
+  Avg RPM per 5-second sprint -> Avg Watt = KP x Avg RPM x 0.98.
+- Does not calculate the round result by averaging instant watt samples.
+- Rest phase remains excluded from RPM and watt calculation.
+
+2. Wingate Test
+- 250 ms RPM sampling is preserved only for stable RPM capture.
+- Result statistics are normalized into 30 one-second buckets.
+- Each second first calculates Avg RPM, then Watt = KP x Avg RPM x 0.98.
+- Peak / Average / Fatigue Index and chart now use the 30-second normalized watt data instead of raw 250 ms samples.
+
+Version note:
+- This version is intended to keep the recovered RPM input behavior from V16.38 while correcting watt calculation / result interpretation.

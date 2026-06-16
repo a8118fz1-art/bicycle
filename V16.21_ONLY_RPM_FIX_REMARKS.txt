@@ -1,0 +1,47 @@
+V16.21 ONLY RPM FIX - Remarks
+=============================
+
+Base version:
+- v16.17
+
+Modification principle:
+- Modify only one item each time
+- Do not modify stable functions
+- Do not refactor parser
+- Do not modify Watt / ERG / Stop
+- Only correct RPM factor logic
+
+Reason for this revision:
+- Previous V16.2 used speed <= 10 as the switching condition.
+- However, this condition was based on FTMS Speed, not real RPM.
+- According to the v16.17 test data, real 10 RPM is approximately FTMS Speed 4.92 km/h.
+- Therefore, the correct switching point must be FTMS Speed <= 4.92.
+
+Modified logic:
+FROM:
+- speed <= 10 ? speed * 2.03 : speed * 2.44
+
+TO:
+- speed <= 4.92 ? speed * 2.03 : speed * 2.44
+
+Expected RPM conversion:
+- FTMS Speed <= 4.92: RPM = FTMS Speed × 2.03
+- FTMS Speed > 4.92: RPM = FTMS Speed × 2.44
+
+Not modified:
+- FTMS parser
+- Watt table
+- Idle watt
+- KP range
+- ERG reverse KP
+- Anti-overshoot
+- Stop logic
+- BLE connection flow
+- Control Point
+- UI functions except visible version/note text
+
+Test suggestion:
+1. Confirm screen shows: V16.21 ONLY RPM FIX
+2. Confirm note shows: FTMS Speed <=4.92 use 2.03, >4.92 use 2.44
+3. Test actual RPM at 10 / 22 / 32 / 52 / 72 / 102 RPM
+4. Confirm Watt / ERG / Stop are not affected

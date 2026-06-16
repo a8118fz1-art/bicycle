@@ -1,0 +1,53 @@
+V16.24 PAGE UI SOURCE FIX - Remarks
+===================================
+
+Base version:
+- V16.23_PAGE_UI_PURE
+
+Purpose:
+- Fix RPM / Watt display source across all pages.
+- This version only modifies UI display source mapping.
+
+Root cause addressed:
+- The page UI had visible values and mirrored values separated by page.
+- To avoid source confusion, this version defines a single canonical source:
+  - correctedRpm: original RPM element updated by app.js
+  - wattText: original Watt element updated by app.js
+- All visible page values mirror only these canonical source elements.
+
+Modified files:
+- index.html
+- style.css
+
+Not modified:
+- app.js
+- FTMS parser
+- RPM factor
+- Watt table
+- Idle watt
+- KP range
+- ERG reverse KP
+- Anti-overshoot
+- Stop logic
+- BLE connection flow
+- Control Point
+
+Important:
+- app.js still updates the original IDs correctedRpm and wattText.
+- Those IDs are now hidden canonical sources.
+- FREE RIDE / ERG / TEST pages show copied values from these same sources.
+- This removes different display sources between pages.
+
+Validation:
+- correctedRpm ID count: 1
+- wattText ID count: 1
+- freeRpmView ID count: 1
+- ergRpmView ID count: 1
+
+Control logic verification:
+- app.js SHA256 before:
+  bdcd85ccdc280fd24367f8d25b843200cf04ccb682923b033a3c1afe9c3c0702
+- app.js SHA256 after:
+  bdcd85ccdc280fd24367f8d25b843200cf04ccb682923b033a3c1afe9c3c0702
+- Result:
+  UNCHANGED

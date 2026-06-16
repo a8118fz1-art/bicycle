@@ -1,0 +1,61 @@
+V16.33 3STEP FLOW FIX - Remarks
+================================
+
+Base version:
+- V16.32_3STEP_KP_MAPPING_FIX
+
+Purpose:
+- Fix 3-STEP TEST execution procedure only.
+- Keep original result page / chart page.
+- app.js is not modified.
+
+Fixed:
+- Each STEP timer is fixed to 10 seconds.
+- STEP indicator changes according to the current running STEP.
+- STEP 1 / STEP 2 / STEP 3 each records max RPM.
+- STEP 2 KP is calculated from STEP 1 max RPM.
+- STEP 3 KP is calculated from STEP 2 max RPM.
+- STEP 3 completion automatically switches to 3-STEP TEST RESULT page.
+
+STEP 2 KP rule:
+- STEP1 max RPM >= 180: base KP + 3
+- STEP1 max RPM >= 150: base KP + 2
+- STEP1 max RPM < 150: base KP + 1
+
+STEP 3 KP rule:
+- STEP2 max RPM >= 180: STEP2 KP + 4
+- STEP2 max RPM >= 150: STEP2 KP + 3
+- STEP2 max RPM >= 130: STEP2 KP + 2
+- STEP2 max RPM < 130: STEP2 KP + 1
+
+Modified files:
+- index.html
+- style.css
+- ui.js
+
+Not modified:
+- app.js
+- FTMS parser
+- RPM factor
+- Watt table
+- Idle watt
+- KP range
+- ERG reverse KP
+- Anti-overshoot
+- BLE connection flow
+- FREE RIDE core
+- ERG core
+
+app.js SHA256 before:
+bdcd85ccdc280fd24367f8d25b843200cf04ccb682923b033a3c1afe9c3c0702
+app.js SHA256 after:
+bdcd85ccdc280fd24367f8d25b843200cf04ccb682923b033a3c1afe9c3c0702
+Result:
+UNCHANGED
+
+ui.js SHA256 before:
+3271555c4ec94f2d917b350c4a9940e11647405ec20c51c1cb2778796f31914b
+ui.js SHA256 after:
+ceb6893192f22a4cac75c2e5c4539d4ba1b5280fce5b3c79ed52a732e6e09163
+Result:
+CHANGED - 3STEP FLOW ONLY

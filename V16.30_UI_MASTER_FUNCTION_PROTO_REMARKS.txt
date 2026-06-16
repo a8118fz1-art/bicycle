@@ -1,0 +1,66 @@
+V16.30 UI MASTER FUNCTION PROTO - Remarks
+=========================================
+
+Base version:
+- V16.25_HOME_CONNECTION_SINGLE_STATUS
+- Control core remains from v16.17 / v16.21 RPM factor fix.
+
+Specification source:
+- FTMS_UI_Structure_Template-V001.xlsx
+
+Purpose:
+- First functional UI prototype based on the Excel page structure.
+- Replace the page UI with 16:10 / 1280×800 style pages.
+- Add page loading / routing flow for:
+  - HOME
+  - FREE RIDE
+  - ERG MODE
+  - TEST MODE
+  - 3-STEP TEST
+  - 3-STEP RESULT
+  - WINGATE TEST
+  - WINGATE RESULT
+  - INTERMITTENT TEST
+  - INTERMITTENT RESULT
+
+Modified files:
+- index.html
+- style.css
+- ui.js
+
+Not modified:
+- app.js
+- FTMS parser
+- RPM factor
+- Watt table
+- Idle watt
+- KP range
+- ERG reverse KP
+- Anti-overshoot
+- Stop logic
+- BLE connection flow
+- Control Point
+
+Functional notes:
+- FREE RIDE:
+  ENTER uses the original sendKpBtn.
+  STOP uses the original stopOutputBtn.
+  +/- uses original kpMinus/kpPlus and targetKp.
+
+- ERG MODE:
+  ENTER uses the original sendWattBtn.
+  STOP mirrors the original stopOutputBtn.
+  +/- uses original wMinus/wPlus and targetWatt.
+
+- TEST:
+  Existing app.js test functions are still available:
+  start3Step / startWingate / startIntermittent.
+  New result pages are UI prototype pages only for now.
+
+Control logic verification:
+- app.js SHA256 before:
+  bdcd85ccdc280fd24367f8d25b843200cf04ccb682923b033a3c1afe9c3c0702
+- app.js SHA256 after:
+  bdcd85ccdc280fd24367f8d25b843200cf04ccb682923b033a3c1afe9c3c0702
+- Result:
+  UNCHANGED

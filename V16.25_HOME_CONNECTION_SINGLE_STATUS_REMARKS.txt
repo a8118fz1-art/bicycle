@@ -1,0 +1,54 @@
+V16.25 HOME CONNECTION SINGLE STATUS - Remarks
+==============================================
+
+Base version:
+- V16.24_PAGE_UI_SOURCE_FIX
+
+Purpose:
+- Finalize HOME page connection display.
+- Show only one connection status:
+  1. Connected device name, OR
+  2. Connection failure warning
+- Do not show both at the same time.
+
+Modified files:
+- index.html
+- style.css
+- assets/home-bg.png
+
+Not modified:
+- app.js
+- FTMS parser
+- RPM factor
+- Watt table
+- Idle watt
+- KP range
+- ERG reverse KP
+- Anti-overshoot
+- Stop logic
+- BLE connection flow
+- Control Point
+
+Display rule:
+- If connected:
+  Show: 已連線設備 : device name
+- If connection failed:
+  Show: 連線失敗 : failure message
+- If ready / not connected:
+  Show: 請點選 BLE 連接設備
+
+Implementation note:
+- app.js still writes to hidden source elements:
+  - status
+  - deviceName
+  - controlStatus
+- HOME visible panel only mirrors these states.
+- No BLE or control behavior is changed.
+
+Control logic verification:
+- app.js SHA256 before:
+  bdcd85ccdc280fd24367f8d25b843200cf04ccb682923b033a3c1afe9c3c0702
+- app.js SHA256 after:
+  bdcd85ccdc280fd24367f8d25b843200cf04ccb682923b033a3c1afe9c3c0702
+- Result:
+  UNCHANGED

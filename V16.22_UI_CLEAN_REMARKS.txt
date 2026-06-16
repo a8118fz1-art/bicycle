@@ -1,0 +1,57 @@
+V16.22 UI CLEAN - Remarks
+=========================
+
+Base version:
+- V16.21_ONLY_RPM_FIX
+- V16.21 was based on v16.17 control logic with only RPM factor correction.
+
+Modification principle:
+- This version only adjusts UI display.
+- No control logic is modified.
+- app.js is not modified.
+
+Modified files:
+- index.html
+- style.css
+
+Not modified:
+- app.js
+- FTMS parser
+- RPM factor logic
+- Watt table
+- Idle watt
+- KP range
+- ERG reverse KP
+- Anti-overshoot
+- Stop logic
+- BLE connection flow
+- Control Point
+
+UI changes:
+- Hide engineering/debug information from normal screen:
+  - Raw Hex
+  - Flags
+  - FTMS Speed
+  - Cadence Field
+  - Resistance
+  - FTMS Power
+  - Debug Log
+  - RPM factor note
+- Keep required debug element IDs in hidden DOM to avoid impacting app.js.
+- Normal user interface keeps:
+  - Connection status
+  - Device / Control
+  - RPM
+  - Actual Power
+  - KP / ERG mode controls
+  - Target KP / Target Watt
+  - Safe Stop / Disconnect
+  - Test Programs
+
+Control logic verification:
+- app.js SHA256 before UI change:
+  bdcd85ccdc280fd24367f8d25b843200cf04ccb682923b033a3c1afe9c3c0702
+- app.js SHA256 after UI change:
+  bdcd85ccdc280fd24367f8d25b843200cf04ccb682923b033a3c1afe9c3c0702
+- Result:
+  UNCHANGED

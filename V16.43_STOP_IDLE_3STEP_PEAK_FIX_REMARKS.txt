@@ -1,0 +1,18 @@
+V16.43_STOP_IDLE_3STEP_PEAK_FIX
+
+Scope:
+- app.js not modified.
+- FTMS parsing / notification not modified.
+- Watt DOM binding not modified.
+- Intermittent / Wingate flow not modified.
+
+Fixes:
+1. FREE RIDE / ERG STOP behavior:
+   - STOP now performs soft stop: clear resistance output only.
+   - It does not call app.js stopOutput(), which would set forceZero and stop live RPM/WATT display.
+   - After STOP, BLE/FTMS live data continues, returning to connected idle/load-free state.
+
+2. 3-STEP result calculation:
+   - Confirmed/locked logic: scan 0.1 to 13.0 KP in 0.1 KP increments.
+   - Final result uses maximum calculated power within that range.
+   - It does not force the result to exactly 13 KP.

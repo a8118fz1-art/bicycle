@@ -1,0 +1,47 @@
+V16.32 3STEP KP MAPPING FIX - Remarks
+=====================================
+
+Base version:
+- V16.31_RESPONSIVE_UI_PROTO
+
+Purpose:
+- Fix 3-STEP TEST STEP 1 target KP calculation.
+- KP must be fixed by gender and body weight range.
+- KP must NOT change proportionally with small weight adjustments.
+
+Correct mapping:
+Male:
+- < 60.0 kg       -> 3.0 KP
+- 60.0–79.9 kg   -> 4.0 KP
+- >= 80.0 kg      -> 5.0 KP
+
+Female:
+- < 50.0 kg       -> 2.0 KP
+- 50.0–69.9 kg   -> 3.0 KP
+- >= 70.0 kg      -> 4.0 KP
+
+Modified files:
+- ui.js
+- index.html version/cache text only
+
+Not modified:
+- app.js
+- style.css
+- FTMS parser
+- RPM factor
+- Watt table
+- Idle watt
+- KP range
+- ERG reverse KP
+- Anti-overshoot
+- Stop logic
+- BLE connection flow
+- Control Point
+
+Control logic verification:
+- app.js SHA256 before:
+  bdcd85ccdc280fd24367f8d25b843200cf04ccb682923b033a3c1afe9c3c0702
+- app.js SHA256 after:
+  bdcd85ccdc280fd24367f8d25b843200cf04ccb682923b033a3c1afe9c3c0702
+- Result:
+  UNCHANGED
