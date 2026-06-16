@@ -1,6 +1,6 @@
-EMS FTMS v16.17 final ERG reverse KP anti-overshoot
+EMS FTMS v16.36
 
-Base: v16.16
+Base: v16.17
 
 Changes in this version:
 - ERG mode uses Target Watt + RPM to reverse lookup required KP from the Watt table.

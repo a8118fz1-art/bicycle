@@ -2,12 +2,24 @@
   const pages={home:"pageHome",freeRide:"pageFreeRide",erg:"pageErg",testMode:"pageTestMode",uartTest:"pageUartTest",threeStep:"pageThreeStep",threeStepResult:"pageThreeStepResult",wingate:"pageWingate",wingateResult:"pageWingateResult",intermittent:"pageIntermittent",intermittentResult:"pageIntermittentResult"};
 
   let activePage="home";
+  function resetErgTimeDistance(){
+    ergLiveState.started = false;
+    ergLiveState.startAt = 0;
+    ergLiveState.lastUpdateAt = 0;
+    ergLiveState.distanceKm = 0;
+    text("ergTimeView", "--:--");
+    text("ergDistanceView", "--.--");
+  }
+
   function showPage(key){
     activePage=key||"home";
     Object.values(pages).forEach(id=>document.getElementById(id)?.classList.remove("active"));
     document.getElementById(pages[key]||pages.home)?.classList.add("active");
     if(key==="uartTest" && typeof window.setCommMode==="function"){
       window.setCommMode("UART");
+    }
+    if(key==="erg"){
+      resetErgTimeDistance();
     }
   }
   document.querySelectorAll("[data-page]").forEach(btn=>btn.addEventListener("click",()=>showPage(btn.dataset.page)));
@@ -22,6 +34,44 @@
   const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
   const text=(id,val)=>{const el=document.getElementById(id); if(el) el.textContent=val;};
 
+  const ergLiveState = {started:false,startAt:0,lastUpdateAt:0,distanceKm:0};
+  function formatElapsedTime(ms){
+    const totalSec = Math.floor(ms/1000);
+    const minutes = String(Math.floor(totalSec/60)).padStart(2,'0');
+    const seconds = String(totalSec%60).padStart(2,'0');
+    return `${minutes}:${seconds}`;
+  }
+
+  function updateErgTimeDistance(rpm, speedText){
+    const now = Date.now();
+    const hasMovement = Number.isFinite(rpm) && rpm > 0;
+    const speed = Number((speedText||"--").replace(/[^0-9.\-]/g,"")).valueOf();
+    const validSpeed = Number.isFinite(speed) && speed > 0;
+
+    if(hasMovement){
+      if(!ergLiveState.started){
+        ergLiveState.started = true;
+        ergLiveState.startAt = now;
+        ergLiveState.lastUpdateAt = now;
+        ergLiveState.distanceKm = 0;
+      } else {
+        const deltaSec = (now - ergLiveState.lastUpdateAt) / 1000;
+        if(validSpeed){
+          ergLiveState.distanceKm += speed * deltaSec / 3600;
+        }
+        ergLiveState.lastUpdateAt = now;
+      }
+    } else if(ergLiveState.started){
+      ergLiveState.lastUpdateAt = now;
+    }
+
+    const elapsedMs = ergLiveState.started ? now - ergLiveState.startAt : 0;
+    const elapsedText = ergLiveState.started ? formatElapsedTime(elapsedMs) : "--:--";
+    const distanceText = ergLiveState.started && validSpeed ? ergLiveState.distanceKm.toFixed(2) : (ergLiveState.started ? ergLiveState.distanceKm.toFixed(2) : "--.--");
+    text("ergTimeView", elapsedText);
+    text("ergDistanceView", distanceText);
+  }
+
   // Soft STOP for FREE RIDE / ERG: clear load only, keep BLE notifications and live RPM/Watt updates.
   // Do not call app.js stopOutput()/safeZeroStop(), because that sets forceZero and blanks live data.
   async function softStopOutputOnly(){
@@ -33,6 +83,7 @@
     }catch(err){
       try{ if(typeof window.writeCP === "function") await window.writeCP([0x04,0,0],true); }catch(e){}
     }
+    resetErgTimeDistance();
     // Restore the visible target setting for the next ENTER; internal output remains KP=0.
     const targetKp=document.getElementById("targetKp");
     if(targetKp) targetKp.value=Number(prevKp||5).toFixed(1);
@@ -103,11 +154,14 @@
     return Number.isFinite(watt)?watt:0;
   }
   function syncLive(){
-    const rpm=(document.getElementById("correctedRpm")?.textContent||"--").replace(" rpm","").trim();
+    const rpmText=(document.getElementById("correctedRpm")?.textContent||"--").replace(" rpm","").trim();
+    const rpm=Number(rpmText);
     refreshNewTestRpmCache();
     const watt=cleanWatt(document.getElementById("wattText")?.textContent||"--");
-    ["freeRpmView","ergRpmView"].forEach(id=>text(id,rpm||"--"));
+    const speedText=document.getElementById("speedText")?.textContent||"--";
+    ["freeRpmView","ergRpmView"].forEach(id=>text(id,Number.isFinite(rpm)?rpmText:"--"));
     ["freeWattView","ergWattView"].forEach(id=>text(id,watt||"--"));
+    updateErgTimeDistance(rpm, speedText);
     const kp=document.getElementById("targetKp")?.value||"5.0";
     const tw=document.getElementById("targetWatt")?.value||"100";
     text("kpMirror",Number(kp).toFixed(1)+" KP");

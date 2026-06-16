@@ -1,4 +1,4 @@
-const APP_VERSION="v16.17-final-erg-reverse-kp-anti-overshoot";
+const APP_VERSION="v16.36";
 
 const FTMS_SERVICE=0x1826,INDOOR_BIKE_DATA=0x2AD2,CONTROL_POINT=0x2AD9;
 let device,server,service,bikeChar,cpChar,currentKP=0,activeMode="NONE",controlArmed=false,lastSendAt=0,testTimer=null,testRunning=false,forceZero=false,sendKpInFlight=false;
@@ -17,7 +17,7 @@ function u16(v,o){return o+1>=v.byteLength?null:v.getUint16(o,true)}
 function i16(v,o){return o+1>=v.byteLength?null:v.getInt16(o,true)}
 function updateState(){$("armedStatus").textContent=controlArmed?"YES":"NO";$("modeStatus").textContent=activeMode}
 function setCommMode(mode){commMode=mode;window.commMode=mode;if(mode==="UART"){$("homeConnectionTitle").textContent="UART";$("homeConnectionText").textContent="UART mode ready";$("homeConnectionIcon").textContent="U";status("UART mode selected for validation.")}else if(mode==="BLE"){$("homeConnectionTitle").textContent="Connection";$("homeConnectionText").textContent="BLE mode ready";$("homeConnectionIcon").textContent="i";status("BLE mode selected.")}else{$("homeConnectionTitle").textContent="Connection";$("homeConnectionText").textContent="No active connection";$("homeConnectionIcon").textContent="i";}}
-function setDisplayZero(){["rawRpm","correctedRpm","wattText","rawHex","flagsText","speedText","cadenceText","resistanceText","powerText"].forEach(id=>$(id).textContent="--")}function updateUartStatus(text){const el=$("uartPortStatus");if(el)el.textContent=text}function updateUartTx(text){const el=$("uartLastTx");if(el)el.textContent=text}function updateUartRx(text){const el=$("uartLastRx");if(el)el.textContent=text}function crc16ccitt(bytes){let crc=0xFFFF;for(const b of bytes){crc^=(b<<8);for(let i=0;i<8;i++){if(crc&0x8000){crc=((crc<<1)^0x1021)&0xFFFF;}else{crc=(crc<<1)&0xFFFF;}}}return crc}
+function setDisplayZero(){["rawRpm","correctedRpm","wattText","rawHex","flagsText","speedText","cadenceText","resistanceText","powerText"].forEach(id=>$(id).textContent="--")}function updateUartStatus(text){const el=$("uartPortStatus"); if(el) el.textContent=text; const home=$("homeUartStatus"); if(home) home.textContent=text}function updateUartTx(text){const el=$("uartLastTx"); if(el) el.textContent=text; const home=$("homeUartLastTx"); if(home) home.textContent=text}function updateUartRx(text){const el=$("uartLastRx"); if(el) el.textContent=text; const home=$("homeUartLastRx"); if(home) home.textContent=text}function crc16ccitt(bytes){let crc=0xFFFF;for(const b of bytes){crc^=(b<<8);for(let i=0;i<8;i++){if(crc&0x8000){crc=((crc<<1)^0x1021)&0xFFFF;}else{crc=(crc<<1)&0xFFFF;}}}return crc}
 function buildUartPacket(cmd,data=[]){const payload=[1+data.length,cmd,...data];const crc=crc16ccitt(payload);return Uint8Array.from([0x55,0xAA,...payload,crc&0xFF,crc>>8,0x0D])}
 function formatHex(bytes){return Array.from(bytes).map(b=>b.toString(16).padStart(2,'0')).join(' ')}
 function serialLog(message){const pre=$("serialLog"); if(pre) pre.textContent=`[${new Date().toLocaleTimeString()}] ${message}\n` + pre.textContent}
@@ -137,7 +137,7 @@ async function readSerialLoop(){
   try{
     while(true){
       const {value, done} = await serialReader.read();
-      if(done) break;
+      status("FTMS 已連線，版本："+APP_VERSION);
       if(value && value.length){
         // append
         const tmp = new Uint8Array(rxBuf.length + value.length);
@@ -182,7 +182,7 @@ function parseSerialPacket(buf){
   const crcH = buf[crcIndex+1];
   const transmitted = (crcH<<8) | crcL;
   const crcRange = Array.from(buf.slice(s+2, s+3+LEN));
-  const computed = crc16ccitt(crcRange);
+      status("FTMS 已連線，版本："+APP_VERSION);
   if(computed !== transmitted){
     serialLog(`CRC MISMATCH cmd=0x${buf[s+3].toString(16).padStart(2,'0')} expected=0x${computed.toString(16).padStart(4,'0')} got=0x${transmitted.toString(16).padStart(4,'0')}`);
     // CRC mismatch: skip this SOF and continue
@@ -393,4 +393,4 @@ $("start3Step").onclick=start3Step;
 $("startWingate").onclick=startWingate;
 $("startIntermittent").onclick=startIntermittent;
 $("stopTest").onclick=stopTest;
-setMode("KP");updateState();setCommMode("NONE");loadUartSettings();log("[System] v16.17-final-erg-reverse-kp-anti-overshoot ready. ERG uses reverse KP lookup with anti-overshoot. Target KP range = 0.1-14.0.");
+setMode("KP");updateState();setCommMode("NONE");loadUartSettings();log(`[System] ${APP_VERSION} ready. ERG uses reverse KP lookup with anti-overshoot. Target KP range = 0.1-14.0.`);

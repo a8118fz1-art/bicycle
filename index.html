@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
-  <title>EMS FTMS V16.33 3STEP FLOW FIX</title>
-  <link rel="stylesheet" href="./style.css?v=16.31-responsive-ui-proto"/>
+  <title>EMS FTMS v16.36</title>
+  <link rel="stylesheet" href="./style.css?v=16.36"/>
 </head>
 <body>
 <div id="app" class="app">
@@ -32,7 +32,7 @@
       <button class="mode-tile" data-page="erg"><span class="tile-icon">◎</span><b>ERG MODE</b><small>功率控制模式</small><em>›</em></button>
       <button class="mode-tile" data-page="testMode"><span class="tile-icon">▤</span><b>TEST MODE</b><small>測試模式</small><em>›</em></button>
     </div>
-    <footer class="footer"><span>◷ 11:40</span><span>♨ 25°C</span><span>Ver. 16.30</span></footer>
+    <footer class="footer"><span>◷ 11:40</span><span>♨ 25°C</span><span>Ver. 16.36</span></footer>
   </section>
 
   <!-- UART TEST -->
@@ -68,7 +68,7 @@
       </div>
       <pre id="serialLog" class="uart-log" aria-live="polite"></pre>
     </div>
-    <footer class="footer"><span>◷ 11:40</span><span>♨ 25°C</span><span>Ver. 16.30</span></footer>
+    <footer class="footer"><span>◷ 11:40</span><span>♨ 25°C</span><span>Ver. 16.36</span></footer>
   </section>
 
   <!-- FREE RIDE -->
@@ -128,7 +128,7 @@
       <button data-page="wingate"><span>30</span><b>WINGATE</b><small>30秒測試</small><em>›</em></button>
       <button data-page="intermittent"><span>▥</span><b>INTERMITTENT</b><small>5秒 × 10回</small><em>›</em></button>
     </div>
-    <footer class="footer"><span>◷ 11:40</span><span>♨ 25°C</span><span>Ver. 16.30</span></footer>
+    <footer class="footer"><span>◷ 11:40</span><span>♨ 25°C</span><span>Ver. 16.36</span></footer>
   </section>
 
   <!-- 3 STEP SETUP -->
@@ -334,7 +334,31 @@
   </section>
 </div>
 
-<script src="./app.js?v=16.21-only-rpm-fix"></script>
-<script src="./ui.js?v=16.33-3step-flow-fix"></script>
+</script>
+<script src="./app.js?v=16.36"></script>
+<script src="./ui.js?v=16.36"></script>
+<script>
+  (function(){
+    function pad(n){return String(n).padStart(2,'0');}
+    function updateFooterTime(){
+      const now=new Date();
+      const t=pad(now.getHours())+':'+pad(now.getMinutes());
+      document.querySelectorAll('footer.footer').forEach(f=>{
+        const spans=f.querySelectorAll('span');
+        if(spans.length) spans[0].textContent='◷ '+t;
+      });
+    }
+    function updateFooterVersion(){
+      const v = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : (new URLSearchParams(location.search).get('v') || 'v?');
+      const disp = 'Ver. ' + String(v).replace(/^v/,'');
+      document.querySelectorAll('footer.footer').forEach(f=>{
+        const spans=f.querySelectorAll('span');
+        if(spans.length>=3) spans[2].textContent=disp; else if(spans.length) spans[spans.length-1].textContent=disp;
+      });
+    }
+    updateFooterTime(); updateFooterVersion();
+    setInterval(updateFooterTime,15*1000);
+  })();
+</script>
 </body>
 </html>
