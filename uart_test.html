@@ -39,14 +39,14 @@
     <pre id="log">--</pre>
   </div>
 
+  <script src="./uart.js"></script>
   <script>
     function parseHexBytes(s){
       if(!s) return [];
       return s.trim().split(/\s+/).map(x=>parseInt(x,16)&0xFF);
     }
-    function crc16ccitt(bytes){let crc=0xFFFF;for(const b of bytes){crc^=(b<<8);for(let i=0;i<8;i++){if(crc&0x8000){crc=((crc<<1)^0x1021)&0xFFFF;}else{crc=(crc<<1)&0xFFFF;}}}return crc}
-    function buildUartPacket(cmd,data=[]){const payload=[1+data.length,cmd,...data];const crc=crc16ccitt(payload);return Uint8Array.from([0x55,0xAA,...payload,crc&0xFF,crc>>8,0x0D])}
-    function toHex(a){return Array.from(a).map(b=>b.toString(16).padStart(2,'0')).join(' ')}
+    // crc16ccitt / buildUartPacket / formatHex 由 uart.js 提供（與 app.js 共用同一份實作）
+    const toHex=formatHex;
 
     let port=null, reader=null, writer=null;
 
