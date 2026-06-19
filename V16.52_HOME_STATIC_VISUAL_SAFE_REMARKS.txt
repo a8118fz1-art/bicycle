@@ -1,5 +1,0 @@
-V16.52 Home Static Visual Safe 1280x800
-Base: V16.45 stable.
-Only style.css and assets/home-static-final-1280x800.jpg added/modified.
-app.js, ui.js, index.html unchanged.
-Home visual is static; original functional buttons are transparent calibrated click zones.
