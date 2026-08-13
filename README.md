@@ -44,6 +44,33 @@ python -m http.server 8000
 STATUS_REPORT 範例
 - 範例 frame: `55 AA 0E 80 ... CRC_L CRC_H 0D`（LEN=14 = CMD(1)+DATA(13)）
 
+## 資產快取戳記（改完 JS / CSS 後必跑）
+
+`index.html` 與 `uart_test.html` 引用資產時帶 `?v=<版本>-<內容雜湊>`。
+雜湊由檔案內容算出，內容一改網址就變，瀏覽器必定重抓，不必叫使用者按 Ctrl+F5。
+
+**改過任何 `.js` 或 `.css` 之後、commit 之前**，在專案根目錄執行：
+
+```powershell
+python tools/stamp_assets.py
+```
+
+沒改到就不會動任何檔案。CI 或 commit 前想先確認可加 `--check`，
+戳記過期時會列出差異並以 exit code 1 結束：
+
+```powershell
+python tools/stamp_assets.py --check
+```
+
+兩點說明：
+
+- 只戳記 JS / CSS，**不含 HTML**。HTML 之間的導覽連結若也戳記會形成循環相依
+  （`index.html` → `app.js` → `uart_test.html` → `index.html`），改一個就讓下一個失效，
+  永遠收斂不了。HTML 由 GitHub Pages 的 Cache-Control 控管，過期會自行重新驗證。
+- 雜湊在計算前會把 CRLF 正規化成 LF。本專案 `core.autocrlf=true`，同一份 commit
+  在工作目錄可能是 LF（直接解壓縮）也可能是 CRLF（經 git checkout 還原），
+  不正規化的話換一台機器 clone 後 `--check` 會誤報。
+
 ## Python UART Mock
 
 你可以使用 `tools/uart_mock.py` 來模擬 MCU 回應。此程式會開啟指定的 COM port，監聽收到的 UART 封包，並在接到 `SET_CONTROL` (`0x10`) 時回送一個 `STATUS_REPORT` (`0x80`) 範例封包。

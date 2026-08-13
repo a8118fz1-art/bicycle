@@ -403,7 +403,7 @@ $("openTestBenchBtn").onclick=async ()=>{
   // 直接跳頁的話阻力會留到下控 3 秒逾時才放，串口也還被本頁佔著。
   // 返回由測試台 header 的「← 回主畫面」負責。
   if(serialPort){try{await closeSerial()}catch(e){log('離開前關閉串口失敗：'+e.message)}}
-  location.href="./uart_test.html?v=16.55";
+  location.href="./uart_test.html";
 };
 $("stopOutputBtn").onclick=stopOutput;
 $("disconnectBtn").onclick=disconnect;
