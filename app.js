@@ -396,7 +396,14 @@ $("sendUartPortBtn").onclick=async ()=>{
 $("saveUartSettingsBtn").onclick=applyUartSettings;
 // 工程測試台為獨立頁面，另開分頁避免離開本頁時 Web Serial / BLE 連線被中斷。
 // 注意：同一個實體串口同時只能被一個頁面開啟，要在測試台開埠請先按 CLOSE UART PORT。
-$("openTestBenchBtn").onclick=()=>{window.open("./uart_test.html?v=16.55","_blank","noopener")};
+$("openTestBenchBtn").onclick=()=>{
+  // 不用 "noopener" 特性字串：加了之後 window.open 依規範一律回傳 null，就無法判斷是否被擋。
+  // 改為開啟後自行切斷 opener，效果相同但保留可偵測性。
+  const url="./uart_test.html?v=16.55";
+  const w=window.open(url,"_blank");
+  if(w){w.opener=null}
+  else{location.href=url} // kiosk 或封鎖彈窗的環境退回同分頁開啟，測試台上有「回主畫面」可返回
+};
 $("stopOutputBtn").onclick=stopOutput;
 $("disconnectBtn").onclick=disconnect;
 $("kpModeBtn").onclick=()=>setMode("KP");
