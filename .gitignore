@@ -1,0 +1,16 @@
+# 本機暫存／未整理的版本資料夾（改版檔案先落在這裡，套用後不進版控）
+files/
+
+# 編輯器與作業系統產生的檔案
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# Python（tools/ems_mock.py 執行後產生）
+__pycache__/
+*.py[cod]
+.venv/
+venv/

@@ -102,7 +102,13 @@ async function openSerial(){
 
 async function closeSerial(){
   try{
-    if(uartSession){uartSession.end(); uartSession=null}
+    // 關 port 前先讓下控放掉阻力：SET_CONTROL(KP,0) + STOP。
+    // 若直接關閉，阻力會一路維持到下控自己的 3 秒通訊逾時才放，這段期間使用者腳上還有負載。
+    // 下控無回應時 safeZero 內部各等一次 ACK 逾時（合計約 1.2 秒）後放行，不會卡住關閉流程。
+    if(uartSession){
+      try{await uartSession.safeZero(EMS_MODE.KP)}catch(e){log('關閉前歸零失敗，仍繼續關閉串口：'+e.message)}
+      uartSession.end(); uartSession=null;
+    }
     if(serialReader){await serialReader.cancel(); serialReader.releaseLock(); serialReader=null}
     if(serialWriter){serialWriter.releaseLock(); serialWriter=null}
     if(serialPort){await serialPort.close(); serialPort=null}
@@ -213,9 +219,13 @@ function handleParsedPacket(pkt){
       const mode = dv.getUint8(10);
       const statusFlag = dv.getUint8(11);
       const errorFlag = dv.getUint8(12);
-      $("rawRpm").textContent = rpm>0?rpm.toString():"--";
-      $("powerText").textContent = est_watt>0?est_watt+" W":"--";
       $("rawHex").textContent = hex;
+      // 有 session 時 rawRpm / powerText / resistanceText / flagsText 已由 onStatus 寫入，
+      // 這裡只在 uart_session.js 未載入的退回模式補上基本兩欄，避免同一欄位被寫兩次。
+      if(!uartSession){
+        $("rawRpm").textContent = rpm>0?rpm.toString():"--";
+        $("powerText").textContent = est_watt>0?est_watt+" W":"--";
+      }
       log(`STATUS_REPORT RPM=${rpm} W=${est_watt} MODE=${mode.toString(16)} STATUS=0x${statusFlag.toString(16)} ERR=0x${errorFlag.toString(16)}`);
     }
   }
