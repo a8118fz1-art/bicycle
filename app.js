@@ -97,7 +97,13 @@ async function openSerial(){
     setCommMode('UART');
     createUartSession();
     readSerialLoop();
-  }catch(e){status('Serial open failed: '+e.message);log(e.message)}
+  }catch(e){
+    // 關掉選埠對話框會丟 NotFoundError，那是規範定義的取消路徑，不該報成開啟失敗。
+    // 註：本函式的 port 是區域變數，serialPort 只在 open() 成功後才指派，
+    // 所以不會像測試台先前那樣留下未開啟的 port。
+    if(e.name==='NotFoundError'){status('已取消選擇串口')}
+    else{status('Serial open failed: '+e.message);log(e.message)}
+  }
 }
 
 async function closeSerial(){

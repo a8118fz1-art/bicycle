@@ -212,9 +212,14 @@ function paintState(){
 
 async function openPort(){
   if(!navigator.serial){logLine('這個瀏覽器沒有 Web Serial，請改用 Chrome 或 Edge。');return}
+  let picked=null;
   try{
-    port=await navigator.serial.requestPort();
-    await port.open({baudRate:Number($('baud').value),dataBits:8,stopBits:1,parity:'none'});
+    picked=await navigator.serial.requestPort();
+    // 只有 open() 成功後才指派給 port。先指派的話，open 失敗會留下一個未開啟的 port，
+    // 之後 closePort() 在 await port.close() 就丟例外，port=null 執行不到而永久卡住，
+    // 只能重新整理頁面。app.js 的 openSerial() 一直是這個順序，這裡先前漏了。
+    await picked.open({baudRate:Number($('baud').value),dataBits:8,stopBits:1,parity:'none'});
+    port=picked;
     writer=port.writable.getWriter();
     session=new EmsUartSession({
       write:async pkt=>{
@@ -241,18 +246,26 @@ async function openPort(){
     logLine(`串口已開啟 @ ${$('baud').value} 8-N-1，心跳 ${$('hbMs').value} ms`);
     paintState();
     readLoop();
-  }catch(e){logLine('開啟失敗：'+e.message)}
+  }catch(e){
+    // 關掉選埠對話框會丟 NotFoundError，那是規範定義的取消路徑，不是錯誤。
+    if(e.name==='NotFoundError'){logLine('已取消選擇串口。')}
+    // port 有值代表已經開成功、是後續初始化才失敗，要把開起來的埠收乾淨。
+    else if(port){logLine('初始化失敗：'+e.message);await closePort()}
+    else{logLine('開啟失敗：'+e.message+'（該埠可能正被其他程式佔用）')}
+    paintState();
+  }
 }
 
 async function closePort(){
-  try{
-    if(session){session.end();session=null}
-    if(reader){await reader.cancel();reader.releaseLock();reader=null}
-    if(writer){writer.releaseLock();writer=null}
-    if(port){await port.close();port=null}
-    rxBuf=new Uint8Array(0);
-    logLine('串口已關閉');
-  }catch(e){logLine('關閉失敗：'+e.message)}
+  // 每一步各自 try/catch：任一步失敗都不該擋住後面的清理，變數也一定要歸零。
+  // 先前是整段包一個 try，port.close() 一丟例外，後面的 port=null 就跳過了，
+  // 導致 port 永久殘留、之後每次關閉都重覆同一個錯誤。
+  if(session){try{session.end()}catch(e){logLine('停止 session 失敗：'+e.message)}session=null}
+  if(reader){try{await reader.cancel();reader.releaseLock()}catch(e){logLine('停止讀取失敗：'+e.message)}reader=null}
+  if(writer){try{writer.releaseLock()}catch(e){logLine('釋放寫入器失敗：'+e.message)}writer=null}
+  if(port){try{await port.close()}catch(e){logLine('關閉串口失敗：'+e.message)}port=null}
+  rxBuf=new Uint8Array(0);
+  logLine('串口已關閉');
   paintState();
 }
 
