@@ -396,13 +396,14 @@ $("sendUartPortBtn").onclick=async ()=>{
 $("saveUartSettingsBtn").onclick=applyUartSettings;
 // 工程測試台為獨立頁面，另開分頁避免離開本頁時 Web Serial / BLE 連線被中斷。
 // 注意：同一個實體串口同時只能被一個頁面開啟，要在測試台開埠請先按 CLOSE UART PORT。
-$("openTestBenchBtn").onclick=()=>{
-  // 不用 "noopener" 特性字串：加了之後 window.open 依規範一律回傳 null，就無法判斷是否被擋。
-  // 改為開啟後自行切斷 opener，效果相同但保留可偵測性。
-  const url="./uart_test.html?v=16.55";
-  const w=window.open(url,"_blank");
-  if(w){w.opener=null}
-  else{location.href=url} // kiosk 或封鎖彈窗的環境退回同分頁開啟，測試台上有「回主畫面」可返回
+$("openTestBenchBtn").onclick=async ()=>{
+  // 一律同分頁開啟：一般瀏覽器與 kiosk 行為一致且可預期。同一個實體串口無法被
+  // 兩個頁面同時佔用，測試台也一定要自己開埠，所以分頁並存沒有實益。
+  // 離開前先走 closeSerial()，它會送 SET_CONTROL(KP,0)+STOP 放掉阻力並釋放串口；
+  // 直接跳頁的話阻力會留到下控 3 秒逾時才放，串口也還被本頁佔著。
+  // 返回由測試台 header 的「← 回主畫面」負責。
+  if(serialPort){try{await closeSerial()}catch(e){log('離開前關閉串口失敗：'+e.message)}}
+  location.href="./uart_test.html?v=16.55";
 };
 $("stopOutputBtn").onclick=stopOutput;
 $("disconnectBtn").onclick=disconnect;
