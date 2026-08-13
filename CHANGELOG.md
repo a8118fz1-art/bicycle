@@ -5,6 +5,24 @@
 
 ---
 
+## V16.55 — UART 阻力序列 / HEARTBEAT / CONTROL_MODE 修正
+
+- **Base**：V16.54
+- **變更檔案**：`app.js`、`uart.js`、`uart_test.html`（改版）、`index.html`（載入新檔）
+- **新增檔案**：`uart_session.js`、`tools/ems_mock.py`、`PROTOCOL_NOTES_2026-08.md`
+- **保留檔案**：`uart_test_legacy.html`（原手動測試頁）
+- **未變更**：`ui.js` / `style.css` / BLE 控制路徑
+
+**依 2026-08 廠商回饋修正**：
+1. `SET_CONTROL(0x10)` 之後補送 `START(0x01)`，阻力輸出才會 ON
+2. `CONTROL_MODE` 對應修正：KP=0 / ERG=1 / DUTY=2（原本整體錯一位）
+3. 新增 `HEARTBEAT(0x40)` 週期送出，預設 1000 ms，生命週期為串口開啟～關閉
+4. 新增 `ACK(0xF0)` / `ERROR_REPORT(0xF1)` 解析與逾時判斷
+5. 安全歸零在 UART 模式改送 `SET_CONTROL(KP,0)` + `STOP`，心跳維持避免 30 秒斷電
+6. 封包解析集中到 `uart.js` 的 `parseUartFrame()`，主程式與測試頁共用
+
+---
+
 ## V16.54 — 3-STEP REST 120S FULL SEQUENCE FIX
 
 - **Base**：V16.52

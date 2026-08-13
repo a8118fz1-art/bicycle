@@ -1,10 +1,11 @@
-const APP_VERSION="v16.54";
+const APP_VERSION="v16.55";
 
 const FTMS_SERVICE=0x1826,INDOOR_BIKE_DATA=0x2AD2,CONTROL_POINT=0x2AD9;
 let device,server,service,bikeChar,cpChar,currentKP=0,activeMode="NONE",controlArmed=false,lastSendAt=0,testTimer=null,testRunning=false,forceZero=false,sendKpInFlight=false;
 let commMode="NONE";
 // Web Serial runtime objects
 let serialPort=null, serialReader=null, serialWriter=null;
+let uartSession=null; // EmsUartSession（uart_session.js）
 let latestRpm=0,lastErgRpm=0,currentErgKP=null,lastErgSendAt=0,ergTargetWatt=0;
 const POWER_RPM_POINTS=[10,20,30,40,50,60,70,80,90,100],POWER_TABLE=[{kp:0,p:[4.4,12.1,18.8,27.4,35.5,44.0,52.3,60.5,68.5,77.0]},{kp:1,p:[3.1,8.1,12.0,18.6,22.5,29.4,35.8,42.0,48.5,55.0]},{kp:2,p:[4.2,10.1,17.6,24.1,32.8,38.9,48.6,58.0,67.0,76.0]},{kp:3,p:[5.7,13.9,25.3,33.6,47.3,54.3,69.4,82.0,94.0,106.0]},{kp:4,p:[7.7,18.5,35.5,45.7,65.9,75.3,96.5,113.0,130.0,147.0]},{kp:5,p:[10.0,25.5,47.8,62.5,88.3,100.8,128.4,150.0,171.0,192.0]},{kp:6,p:[12.0,34.0,64.6,82.7,116.5,131.0,168.3,196.0,224.0,252.0]},{kp:7,p:[14.5,44.3,81.7,106.3,146.6,168.0,209.8,245.0,280.0,315.0]},{kp:8,p:[17.0,44.3,103.7,132.9,182.3,209.3,258.4,303.0,348.0,393.0]},{kp:9,p:[27.1,75.3,117.2,181.4,215.3,287.4,318.9,375.1,403.3,458.0]},{kp:10,p:[32.4,92.2,140.6,214.3,256.8,337.7,392.0,455.0,501.7,566.5]},{kp:11,p:[37.8,109.1,164.0,247.3,298.3,387.9,465.0,535.0,600.0,675.0]},{kp:12,p:[43.1,128.2,189.3,285.6,344.5,445.0,535.0,620.0,702.5,787.5]},{kp:13,p:[48.3,147.2,214.5,323.8,390.6,502.0,605.0,705.0,805.0,900.0]},{kp:14,p:[53.6,166.3,239.8,362.1,436.8,559.1,675.0,790.0,907.5,1012.5]}];
 const $=id=>document.getElementById(id),sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -26,10 +27,18 @@ async function sendUartControl(cmd,data=[]){
   await sendUartThroughSerial(buildUartPacket(cmd,data));
   return true;
 }
-function uartKpPayload(kp){const value=Math.round(kp*10);return [0x01,value&0xFF,(value>>8)&0xFF]}
-function uartWattPayload(watt){const value=Math.round(watt);return [0x02,value&0xFF,(value>>8)&0xFF]}
-async function sendUartKP(kp){return await sendUartControl(0x10,uartKpPayload(kp))}
-async function sendUartWatt(watt){return await sendUartControl(0x10,uartWattPayload(watt))}
+function uartKpPayload(kp){const value=Math.round(kp*10);return [0x00,value&0xFF,(value>>8)&0xFF]} // MODE_KP=0，target 0~140 (=0.0~14.0 KP)
+function uartWattPayload(watt){const value=Math.round(watt);return [0x01,value&0xFF,(value>>8)&0xFF]} // MODE_ERG=1，target 單位 Watt
+async function sendUartKP(kp){
+  if(!shouldUseUart()) return false;
+  if(uartSession) return await uartSession.setTarget(EMS_MODE.KP,kp); // SET_CONTROL(+START if OFF)
+  return await sendUartControl(0x10,uartKpPayload(kp));
+}
+async function sendUartWatt(watt){
+  if(!shouldUseUart()) return false;
+  if(uartSession) return await uartSession.setTarget(EMS_MODE.ERG,watt);
+  return await sendUartControl(0x10,uartWattPayload(watt));
+}
 function uartValidate(){
   if(commMode!=="UART"){setCommMode("UART");status("UART validation mode active. Tap Setting again to show sample packet.");return;}
   const packet=buildUartPacket(0x10,[0x01,0xFA,0x00]);
@@ -86,12 +95,14 @@ async function openSerial(){
     log(`Serial port opened @ ${settings.baudRate}/${settings.dataBits}/${settings.parity}/${settings.stopBits}`);
     updateUartStatus(`OPEN @ ${settings.baudRate}`);
     setCommMode('UART');
+    createUartSession();
     readSerialLoop();
   }catch(e){status('Serial open failed: '+e.message);log(e.message)}
 }
 
 async function closeSerial(){
   try{
+    if(uartSession){uartSession.end(); uartSession=null}
     if(serialReader){await serialReader.cancel(); serialReader.releaseLock(); serialReader=null}
     if(serialWriter){serialWriter.releaseLock(); serialWriter=null}
     if(serialPort){await serialPort.close(); serialPort=null}
@@ -99,6 +110,31 @@ async function closeSerial(){
     updateUartStatus('CLOSED');
     setCommMode('NONE');
   }catch(e){status('Serial close failed: '+e.message);log(e.message)}
+}
+
+function createUartSession(){
+  if(typeof EmsUartSession==='undefined'){log('uart_session.js 未載入，將維持舊有單封包模式');return}
+  if(uartSession){uartSession.end()}
+  uartSession=new EmsUartSession({
+    write:pkt=>sendUartThroughSerial(pkt),
+    log:msg=>{log(msg);serialLog(msg)},
+    heartbeatMs:Number(localStorage.getItem('uartHeartbeatMs')||1000),
+    onState:(st,ses)=>{
+      controlArmed=(st==='RUNNING');
+      updateState();
+      updateUartStatus(`${st}${ses.linkAlive?'':' / LINK LOST'}`);
+    },
+    onStatus:st=>{
+      $("rawRpm").textContent=st.rpm>0?String(st.rpm):"--";
+      $("powerText").textContent=st.est_watt>0?st.est_watt+" W":"--";
+      $("resistanceText").textContent=`${st.modeName} ${st.target_value}`;
+      $("flagsText").textContent=`${st.statusText} / ERR:${st.errorText}`;
+    },
+    onAck:info=>serialLog(`ACK: ${info.cmdName} → ${info.resultName}`),
+    onError:info=>status(`下控回報錯誤：${info.text}`)
+  });
+  uartSession.begin();
+  log('UART session started（HEARTBEAT 已啟動）');
 }
 
 async function sendUartThroughSerial(packet){
@@ -155,51 +191,16 @@ async function readSerialLoop(){
   finally{try{serialReader.releaseLock()}catch(e){}serialReader=null}
 }
 
-function parseSerialPacket(buf){
-  // Find SOF
-  let s = -1;
-  for(let i=0;i<buf.length-1;i++){
-    if(buf[i]===0x55 && buf[i+1]===0xAA){ s = i; break }
-  }
-  if(s<0){
-    if(buf.length>0) serialLog(`RAW RX (no SOF yet): ${formatHex(buf.slice(-32))}`);
-    return null;
-  }
-  if(buf.length < s+3) return null; // need LEN
-  const LEN = buf[s+2];
-  const total = 2 + 1 + LEN + 2 + 1; // SOF(2)+LEN(1)+LEN(CMD+DATA)+CRC(2)+EOF(1)
-  if(buf.length < s + total) return null; // wait for more
-  const eof = buf[s+total-1];
-  if(eof !== 0x0D){
-    serialLog(`BAD EOF at offset ${s}: ${formatHex(buf.slice(s, s+Math.min(16, buf.length-s)))}`);
-    // corrupt frame, skip SOF
-    return {packet:null, consumed: s+2};
-  }
-  const crcIndex = s + 3 + LEN;
-  const crcL = buf[crcIndex];
-  const crcH = buf[crcIndex+1];
-  const transmitted = (crcH<<8) | crcL;
-  const crcRange = Array.from(buf.slice(s+2, s+3+LEN));
-  const computed = crc16ccitt(crcRange);
-  if(computed !== transmitted){
-    serialLog(`CRC MISMATCH cmd=0x${buf[s+3].toString(16).padStart(2,'0')} expected=0x${computed.toString(16).padStart(4,'0')} got=0x${transmitted.toString(16).padStart(4,'0')}`);
-    // CRC mismatch: skip this SOF and continue
-    return {packet:null, consumed: s+2};
-  }
-  const payloadStart = s+3; // CMD
-  const payload = buf.slice(payloadStart, payloadStart+LEN);
-  const cmd = payload[0];
-  const data = payload.slice(1);
-  const rawBytes = buf.slice(s, s+total);
-  return {packet:{cmd, data, rawBytes}, consumed: s+total};
-}
+// 解析邏輯集中於 uart.js 的 parseUartFrame()，與 uart_test.html 共用同一份實作
+function parseSerialPacket(buf){return parseUartFrame(buf,serialLog)}
 
 function handleParsedPacket(pkt){
   if(!pkt) return;
   const hex = formatHex(pkt.rawBytes);
   serialLog("FRAME RX: "+hex);
   updateUartRx(hex);
-  log('Parsed frame cmd=0x'+pkt.cmd.toString(16).padStart(2,'0'));
+  if(uartSession) uartSession.onFrame(pkt);
+  if(pkt.cmd!==0x80) log('Parsed frame cmd=0x'+pkt.cmd.toString(16).padStart(2,'0'));
   if(pkt.cmd===0x80){
     // STATUS_REPORT, expect 13 bytes
     if(pkt.data.length>=13){
@@ -361,7 +362,9 @@ async function sendWatt(w){
   log(`已啟動 ERG Reverse KP Target=${watt} W`);
   if(latestRpm<=0)log("ERG: 等待踩踏 RPM 後自動計算 KP")
 }
-async function safeZeroStop(){stopTest();log("開始安全歸零序列...");let allOk=true;for(let i=1;i<=3;i++){const s1=await writeCP([0x00],true);await sleep(100);const s2=await writeCP([0x05,0,0],true);await sleep(160);const s3=await writeCP([0x04,0,0],true);await sleep(160);const s4=await writeCP([0x08,0x01],true);await sleep(250);if(!s1||!s2||!s3||!s4)allOk=false;log(`安全歸零序列 ${i}/3 已送出`)}const s5=await writeCP([0x00],true);await sleep(100);const s6=await writeCP([0x04,0,0],true);await sleep(300);if(!s5||!s6)allOk=false;forceZero=true;controlArmed=false;activeMode="NONE";currentKP=0;currentErgKP=null;ergTargetWatt=0;$("targetKp").value="5.0";setDisplayZero();updateState();status(allOk?"已完成安全歸零：Power=0 / Resistance=0 / Stop 重複送出。":"安全歸零部分失敗，請手動確認車輛已停止施力。")}
+async function safeZeroStop(){stopTest();log("開始安全歸零序列...");
+  if(shouldUseUart()&&uartSession){const ok=await uartSession.safeZero(EMS_MODE.KP);forceZero=true;controlArmed=false;activeMode="NONE";currentKP=0;currentErgKP=null;ergTargetWatt=0;setDisplayZero();updateState();status(ok?"UART 安全歸零完成：SET_CONTROL(KP,0) + STOP，心跳持續。":"UART 安全歸零未收到 ACK，請確認下控狀態。");return}
+let allOk=true;for(let i=1;i<=3;i++){const s1=await writeCP([0x00],true);await sleep(100);const s2=await writeCP([0x05,0,0],true);await sleep(160);const s3=await writeCP([0x04,0,0],true);await sleep(160);const s4=await writeCP([0x08,0x01],true);await sleep(250);if(!s1||!s2||!s3||!s4)allOk=false;log(`安全歸零序列 ${i}/3 已送出`)}const s5=await writeCP([0x00],true);await sleep(100);const s6=await writeCP([0x04,0,0],true);await sleep(300);if(!s5||!s6)allOk=false;forceZero=true;controlArmed=false;activeMode="NONE";currentKP=0;currentErgKP=null;ergTargetWatt=0;$("targetKp").value="5.0";setDisplayZero();updateState();status(allOk?"已完成安全歸零：Power=0 / Resistance=0 / Stop 重複送出。":"安全歸零部分失敗，請手動確認車輛已停止施力。")}
 async function stopOutput(){await safeZeroStop()}
 async function disconnect(){await safeZeroStop();await sleep(1000);try{if(bikeChar)bikeChar.removeEventListener("characteristicvaluechanged",onBike)}catch(e){}try{if(device&&device.gatt&&device.gatt.connected)device.gatt.disconnect()}catch(e){}$("deviceName").textContent="--";$("controlStatus").textContent="--";setDisplayZero();controlArmed=false;activeMode="NONE";updateState();setCommMode("NONE");status("已安全歸零並斷線。")}
 function setMode(m){$("kpModeBtn").classList.toggle("active",m==="KP");$("ergModeBtn").classList.toggle("active",m==="ERG");$("kpPanel").classList.toggle("hidden",m!=="KP");$("ergPanel").classList.toggle("hidden",m!=="ERG")}
@@ -375,8 +378,15 @@ $("connectBtn").onclick=connect;
 // Keep it as page navigation only and use the UART TEST page controls for serial send/receive.
 $("openSerialBtn").onclick=openSerial;
 $("closeSerialBtn").onclick=closeSerial;
-$("sendUartPortBtn").onclick=()=>{ const pkt = buildUartPacket(0x10,[0x01,0xFA,0x00]); sendUartThroughSerial(pkt); };
+$("sendUartPortBtn").onclick=async ()=>{
+  // 測試序列：SET_CONTROL(ERG 250W) → ACK → START → ACK（阻力才會 ON）
+  if(uartSession){ await uartSession.arm(EMS_MODE.ERG,250); }
+  else { sendUartThroughSerial(buildUartPacket(0x10,[0x01,0xFA,0x00])); }
+};
 $("saveUartSettingsBtn").onclick=applyUartSettings;
+// 工程測試台為獨立頁面，另開分頁避免離開本頁時 Web Serial / BLE 連線被中斷。
+// 注意：同一個實體串口同時只能被一個頁面開啟，要在測試台開埠請先按 CLOSE UART PORT。
+$("openTestBenchBtn").onclick=()=>{window.open("./uart_test.html?v=16.55","_blank","noopener")};
 $("stopOutputBtn").onclick=stopOutput;
 $("disconnectBtn").onclick=disconnect;
 $("kpModeBtn").onclick=()=>setMode("KP");

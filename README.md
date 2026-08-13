@@ -5,9 +5,16 @@ This workspace contains a web-based HMI and a minimal UART validation flow for t
 目標
 - 在瀏覽器端快速建立、送出與解析 EMS UART 封包（CRC16-CCITT，SOF=55 AA，EOF=0x0D，LEN = CMD+DATA 長度）。
 
+> **v16.55 起**：阻力控制必須走 `SET_CONTROL(0x10)` → `START(0x01)` 序列，
+> 並以 `HEARTBEAT(0x40)` 維持通訊（3 秒無通訊關阻力、30 秒斷電）。
+> 詳見 `PROTOCOL_NOTES_2026-08.md`。
+
 目前功能
 - `index.html` + `app.js`：主要 HMI 與 BLE 控制邏輯。
-- `uart_test.html`：獨立的手動測試頁面，可建立任意 CMD + DATA 的封包，並使用 Web Serial 送出與接收。
+- `uart_session.js`：UART 連線階段管理（序列、心跳、ACK 等待、逾時偵測）。
+- `uart_test.html`：工廠測試台，含序列梯、STATUS 即時解碼與手動封包工具。
+- `uart_test_legacy.html`：舊版純手動封包頁面（保留）。
+- `tools/ems_mock.py`：下控模擬器，可用 `--selftest` 在無硬體下驗證狀態機。
 
 快速開始（在 Windows + Chromium-based browser）
 1. 確認使用 Chromium-based 瀏覽器（Chrome/Edge/Brave）支援 Web Serial。Chrome 79+ 支援，Edge 79+ 支援。
