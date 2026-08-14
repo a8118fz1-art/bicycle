@@ -201,14 +201,26 @@
     }
 
     /**
+     * 是否可以信任「下控目前正在 RUNNING」。
+     * 只看 this.state 不夠：連線中斷後 state 會一直停在最後一次收到的 RUNNING，
+     * 那個值已經過期。必須連線還活著、且最近一次 STATUS_REPORT 確實回報 running 才算數。
+     */
+    _confirmedRunning() {
+      return !!(this.linkAlive && this.lastStatus && this.lastStatus.running);
+    }
+
+    /**
      * 完整開啟阻力序列：SET_CONTROL → ACK_OK → START → ACK_OK。
-     * 若已在 RUNNING，只送 SET_CONTROL 更新目標值。
+     * 只有在確認下控真的還在 RUNNING 時才略過 START。
      */
     async arm(mode, value) {
       const a1 = await this.setControl(mode, value);
       if (!a1) { this.log('ARM 失敗：SET_CONTROL 無 ACK'); return false; }
       if (a1.result !== 0) { this.log(`ARM 失敗：SET_CONTROL ${a1.resultName}`); return false; }
-      if (this.state === 'RUNNING') return true;
+      // 先前這裡是 if (this.state === 'RUNNING') return true，連線中斷時會採信過期的
+      // RUNNING 而不送 START，阻力沒開、卻仍回傳 true，按鈕看起來像沒反應。
+      if (this._confirmedRunning()) return true;
+      if (this.state === 'RUNNING') this.log('RUNNING 狀態未經下控確認（連線中斷或尚無回報），仍送出 START');
       const a2 = await this.start();
       if (!a2) { this.log('ARM 失敗：START 無 ACK'); return false; }
       if (a2.result !== 0) { this.log(`ARM 失敗：START ${a2.resultName}`); return false; }
@@ -218,7 +230,9 @@
 
     /** 已 ON 狀態下調整目標；未 ON 時自動補完整序列 */
     async setTarget(mode, value) {
-      if (this.state === 'RUNNING') {
+      // 判斷條件與 arm() 一致：未經下控確認的 RUNNING 不可採信，
+      // 否則同樣會只送 SET_CONTROL 而漏掉 START。
+      if (this._confirmedRunning()) {
         const ack = await this.setControl(mode, value);
         return !!(ack && ack.result === 0);
       }

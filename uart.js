@@ -15,7 +15,15 @@ function parseUartFrame(buf,onDiag){
   const diag=onDiag||(()=>{});
   let s=-1;
   for(let i=0;i<buf.length-1;i++){if(buf[i]===0x55&&buf[i+1]===0xAA){s=i;break}}
-  if(s<0){if(buf.length>0)diag(`RAW RX (no SOF yet): ${formatHex(buf.slice(-32))}`);return null}
+  if(s<0){
+    // 緩衝區尾端剛好是 0x55 時，那是 SOF 被切在兩次 read 之間的正常情況（0x55 已到、
+    // 0xAA 還沒），不是雜訊。先前一律示警，導致封包記錄被「RAW RX (no SOF yet): 55」
+    // 洗版，真正的 ACK / TIMEOUT 訊息被擠掉。只回報真正無法構成 SOF 開頭的位元組。
+    const pending=buf.length>0&&buf[buf.length-1]===0x55?1:0;
+    const junk=buf.slice(0,buf.length-pending);
+    if(junk.length>0)diag(`RAW RX (no SOF yet): ${formatHex(junk.slice(-32))}`);
+    return null;
+  }
   if(buf.length<s+3)return null;
   const LEN=buf[s+2];
   const total=2+1+LEN+2+1; // SOF(2)+LEN(1)+LEN(CMD+DATA)+CRC(2)+EOF(1)
