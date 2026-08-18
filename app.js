@@ -238,7 +238,12 @@ function handleParsedPacket(pkt){
 }
 function rpmCorrect(speed){if(forceZero||speed==null||speed<=0)return 0;return speed<=4.92?speed*2.03:speed*2.44}
 function pAt(row,rpm){const xs=POWER_RPM_POINTS,ys=row.p;if(rpm<=xs[0]){const s=(ys[1]-ys[0])/(xs[1]-xs[0]);return Math.max(0,ys[0]+s*(rpm-xs[0]))}if(rpm>=xs[xs.length-1]){const n=xs.length,s=(ys[n-1]-ys[n-2])/(xs[n-1]-xs[n-2]);return Math.max(0,ys[n-1]+s*(rpm-xs[n-1]))}for(let i=0;i<xs.length-1;i++)if(rpm>=xs[i]&&rpm<=xs[i+1])return lerp(ys[i],ys[i+1],(rpm-xs[i])/(xs[i+1]-xs[i]));return 0}
-function powerCorrect(kp,rpm){if(rpm<=0)return 0;const t=POWER_TABLE;if(kp<=t[0].kp)return pAt(t[0],rpm);if(kp>=t[t.length-1].kp)return pAt(t[t.length-1],rpm);for(let i=0;i<t.length-1;i++){const a=t[i],b=t[i+1];if(kp>=a.kp&&kp<=b.kp)return lerp(pAt(a,rpm),pAt(b,rpm),(kp-a.kp)/(b.kp-a.kp))}return 0}
+// KP 0 那一列量的是「無阻力」（無電磁負載），與 KP 1~14 的加載狀態是不同的量測條件，
+// 兩者之間線性內插沒有物理意義：該列整列高於 KP 1，內插會得到「阻力調高、功率反而下降」
+// 的曲線，而 UI 的 KP 下限是 0.1，這一段使用者調得到。
+// 因此 KP 0 只在剛好為 0 時回報無阻力基準；0 < KP < 1 沒有量測資料，一律取 KP 1 的值。
+// kpForTargetWatt() 原本就是從 rows[1] 起算跳過 KP 0，這裡與其一致。
+function powerCorrect(kp,rpm){if(rpm<=0)return 0;const t=POWER_TABLE;if(kp<=0)return pAt(t[0],rpm);if(kp<=t[1].kp)return pAt(t[1],rpm);if(kp>=t[t.length-1].kp)return pAt(t[t.length-1],rpm);for(let i=1;i<t.length-1;i++){const a=t[i],b=t[i+1];if(kp>=a.kp&&kp<=b.kp)return lerp(pAt(a,rpm),pAt(b,rpm),(kp-a.kp)/(b.kp-a.kp))}return 0}
 window.powerCorrect=powerCorrect;
 
 function kpForTargetWatt(targetWatt,rpm){
