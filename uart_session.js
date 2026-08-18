@@ -41,13 +41,19 @@
   function encodeTarget(mode, value) {
     if (mode === MODE.KP) return Math.round(Math.max(0, Math.min(14, Number(value) || 0)) * 10);
     if (mode === MODE.DUTY) return Math.round(Math.max(0, Math.min(100, Number(value) || 0)) * 10);
-    return Math.round(Math.max(0, Number(value) || 0)); // ERG: Watt
+    // ERG: Watt。協定 v0.2 §14：MODE_ERG 接受 0~3000 W，超出範圍下控回 ACK_PARAM_ERROR。
+    return Math.round(Math.max(0, Math.min(3000, Number(value) || 0)));
   }
 
   function decodeStatus(data) {
     if (!data || data.length < 13) return null;
     const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
-    const mode = dv.getUint8(10), status = dv.getUint8(11), error = dv.getUint8(12);
+    const mode = dv.getUint8(10), status = dv.getUint8(11);
+    // 協定 v0.2 附錄 D.2：error 為 uint16_t（offset 12），DATA 固定 14 bytes（LEN=0x0F）。
+    // v0.1 寫的是 uint8 / 13 bytes，但實機從一開始就送 14 bytes。
+    // 仍保留 13 bytes 的退路：萬一遇到舊韌體，以 uint8 解讀即可，
+    // 若直接要求 14 會讓整個 STATUS 顯示失效，那是更糟的失敗方式。
+    const error = data.length >= 14 ? dv.getUint16(12, true) : dv.getUint8(12);
     return {
       rpm: dv.getUint16(0, true),
       est_current_mA: dv.getUint16(2, true),

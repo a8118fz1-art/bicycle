@@ -203,7 +203,10 @@ class Controller:
             + est_watt.to_bytes(2, "little")
             + duty.to_bytes(2, "little")
             + self.target.to_bytes(2, "little")
-            + bytes([self.mode, status, self.error])
+            + bytes([self.mode, status])
+            # 協定 v0.2 附錄 D.2：error 為 uint16_t，DATA 合計 14 bytes（LEN=0x0F）。
+            # v0.1 寫的是 uint8 / 13 bytes，模擬器先前跟著寫成 13，與實機不符。
+            + (self.error & 0xFFFF).to_bytes(2, "little")
         )
         return build_packet(CMD_STATUS_REPORT, payload)
 
