@@ -196,6 +196,29 @@
       <div class="cell"><b>狀態</b><span id="recState">未紀錄</span></div>
       <div class="cell"><b>已收集</b><span id="recCount">0</span></div>
     </div>
+
+    <h2 style="margin-top:18px">7 · ERG 逐點掃描</h2>
+    <p class="note" style="margin-top:0">
+      ERG 是閉迴路，下控會把 duty 調到<b>它自己算的</b> est_watt 等於目標值，所以 est_watt 必然貼近
+      target，看不出誤差。<b>有效資訊是「功率機實際讀值」與「目標值」的差距</b>，那才是下控扭力表要修正的量。<br>
+      扭力表是電流 × 轉速的二維表，<b>請在多個迴轉數各掃一輪</b>，只掃單一 RPM 的修正只在該轉速成立。
+      另外 duty 到 100.0% 代表下控已達不到目標，那些點無效，匯出後請剔除。
+    </p>
+    <div class="row">
+      <input id="sweepList" type="text" value="50,100,150,200,250,300" aria-label="目標瓦特清單" placeholder="目標瓦特 逗號分隔" />
+      <input id="sweepRpm" type="text" value="60" aria-label="目前迴轉數" placeholder="目前 RPM 例 60" />
+      <input id="sweepHold" type="number" value="5" min="1" aria-label="保持秒數" placeholder="保持秒數" />
+    </div>
+    <div class="row">
+      <button class="primary" id="sweepStartBtn">開始掃描</button>
+      <button id="sweepNextBtn">下一點</button>
+      <button class="danger" id="sweepEndBtn">結束掃描</button>
+    </div>
+    <div class="readout" style="margin-top:10px">
+      <div class="cell"><b>進度</b><span id="sweepProg">--</span></div>
+      <div class="cell"><b>目前測試點</b><span id="sweepPoint">--</span></div>
+      <div class="cell wide"><b>提示</b><span id="sweepHint">填好目標清單與目前 RPM 後按「開始掃描」</span></div>
+    </div>
   </section>
 </div>
 
@@ -338,7 +361,7 @@ function recSample(st){
     ref:$('recRef').value.trim(),
     st:st
   });
-  if(recRows.length%10===0) recPaint();
+  recPaint();  // 10 Hz 下每筆重畫兩個 textContent，成本可忽略；分批更新會讓操作者以為沒在收
 }
 function recToggle(){
   recOn=!recOn;
@@ -371,6 +394,18 @@ function recExport(){
   setTimeout(()=>URL.revokeObjectURL(url),1000);
   logLine('已匯出 '+recRows.length+' 筆');
 }
+/* 把目前輸入框的功率機讀值回填到「同一個標記」的所有列。
+   操作者是在保持期間才讀得到功率機數值，等他打完字，前面幾筆早就已經記錄了，
+   所以不能只在取樣當下寫入，換點與結束時要回頭補上。 */
+function recApplyRef(tag){
+  const ref=$('recRef').value.trim();
+  if(!ref||!tag) return 0;
+  let n=0;
+  for(const r of recRows){ if(r.tag===tag && !r.ref){ r.ref=ref; n++; } }
+  if(n) logLine(`已將功率機讀值 ${ref} W 套用到「${tag}」的 ${n} 筆`);
+  return n;
+}
+
 function recClear(){
   if(recRows.length && !confirm('確定清除已收集的 '+recRows.length+' 筆紀錄？')) return;
   recRows=[];recOn=false;$('recBtn').textContent='開始紀錄';logLine('已清除紀錄');recPaint();
@@ -409,6 +444,66 @@ $('sendBtn').onclick=async()=>{
   logLine('TX  '+formatHex(pkt));
   paintState();
 };
+/* ---------- ERG 逐點掃描 ----------
+   半自動：換點由程式送出 SET_CONTROL 並打好標記，功率機讀值仍由操作者輸入，
+   因為那個數值來自外部儀器。倒數只是提示保持時間已足夠，不會自動換點。 */
+let swList=[], swIdx=-1, swTimer=null, swLeft=0;
+
+function swTag(){ return `ERG ${swList[swIdx]}W @${$('sweepRpm').value.trim()||'?'}rpm`; }
+function swPaint(hint){
+  $('sweepProg').textContent = swIdx<0 ? '--' : `第 ${swIdx+1} / ${swList.length} 點`;
+  $('sweepPoint').textContent = swIdx<0 ? '--' : swTag();
+  if(hint!==undefined) $('sweepHint').textContent=hint;
+}
+function swCountdown(){
+  clearInterval(swTimer);
+  swLeft=Math.max(1,Number($('sweepHold').value)||5);
+  swPaint(`保持中，尚餘 ${swLeft} 秒`);
+  swTimer=setInterval(()=>{
+    swLeft--;
+    if(swLeft>0){ swPaint(`保持中，尚餘 ${swLeft} 秒`); }
+    else{ clearInterval(swTimer); swTimer=null; swPaint('可讀取功率機，填入讀值後按「下一點」'); }
+  },1000);
+}
+async function swGoto(i){
+  swIdx=i;
+  const w=swList[i];
+  $('recTag').value=swTag();
+  const ok=await session.setTarget(EMS_MODE.ERG,w);   // 未 RUNNING 時會自動補 SET_CONTROL + START
+  if(!ok){ swPaint('送出目標失敗，請看封包記錄'); return }
+  logLine(`掃描第 ${i+1}/${swList.length} 點：ERG ${w} W`);
+  swCountdown();
+}
+async function swStart(){
+  if(!needSession()) return;
+  swList=$('sweepList').value.split(/[,，\s]+/).map(s=>Number(s)).filter(n=>Number.isFinite(n)&&n>=0&&n<=3000);
+  if(!swList.length){ swPaint('目標清單無效，請填 0~3000 之間的數字'); return }
+  if(!recOn) recToggle();          // 掃描一定要有紀錄，沒開就自動開
+  $('recRef').value='';
+  await swGoto(0);
+}
+async function swNext(){
+  if(swIdx<0){ swPaint('請先按「開始掃描」'); return }
+  recApplyRef(swTag());            // 先把讀值補回本點的列，再換點
+  $('recRef').value='';
+  if(swIdx+1>=swList.length){ await swEnd(); return }
+  await swGoto(swIdx+1);
+}
+async function swEnd(){
+  if(swIdx>=0) recApplyRef(swTag());
+  clearInterval(swTimer); swTimer=null;
+  if(session){ await session.safeZero(EMS_MODE.ERG); }
+  swIdx=-1; swList=[];
+  $('recRef').value='';
+  swPaint('掃描結束，已送出目標歸零與 STOP。可按「匯出 CSV」。');
+  $('sweepProg').textContent='--'; $('sweepPoint').textContent='--';
+  if(recOn) recToggle();
+}
+
+$('sweepStartBtn').onclick=swStart;
+$('sweepNextBtn').onclick=swNext;
+$('sweepEndBtn').onclick=swEnd;
+
 $('recBtn').onclick=recToggle;
 $('recExportBtn').onclick=recExport;
 $('recClearBtn').onclick=recClear;
