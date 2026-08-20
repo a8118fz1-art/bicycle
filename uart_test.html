@@ -175,6 +175,28 @@
     <label for="packetView">封包內容</label>
     <pre id="packetView">--</pre>
   </section>
+
+  <section class="panel" style="margin-top:16px">
+    <h2>6 · 功率校正紀錄</h2>
+    <p class="note" style="margin-top:0">
+      上功率機時使用。按<b>開始紀錄</b>後，每一筆 STATUS_REPORT（100 ms 一筆）都會連同時間、
+      標記與參考功率機讀值存下來，結束後匯出 CSV。<b>每個測試點請先填好標記與參考讀值再保持 5 秒以上</b>，
+      因為 START 之後 PWM 是斜坡上升的，前幾秒量到的是過渡值。
+    </p>
+    <div class="row">
+      <input id="recTag" type="text" placeholder="標記 例 KP5.0 60rpm" aria-label="測試點標記" />
+      <input id="recRef" type="number" step="0.1" placeholder="功率機讀值 W" aria-label="參考功率機讀值" />
+    </div>
+    <div class="row">
+      <button class="primary" id="recBtn">開始紀錄</button>
+      <button id="recExportBtn">匯出 CSV</button>
+      <button class="danger" id="recClearBtn">清除</button>
+    </div>
+    <div class="readout" style="margin-top:10px">
+      <div class="cell"><b>狀態</b><span id="recState">未紀錄</span></div>
+      <div class="cell"><b>已收集</b><span id="recCount">0</span></div>
+    </div>
+  </section>
 </div>
 
 <script src="./uart.js?v=16.55-eebccf28"></script>
@@ -238,6 +260,7 @@ async function openPort(){
         $('oTarget').textContent=st.target_value;
         $('oStatus').textContent=st.statusText;
         $('oError').textContent=st.errorText;
+        recSample(st);
       },
       onAck:info=>logLine(`ACK ${info.cmdName} → ${info.resultName}`),
       onError:info=>logLine(`ERROR_REPORT ${info.text}`)
@@ -293,6 +316,66 @@ async function readLoop(){
 
 function needSession(){if(!session){logLine('請先開啟串口。');return false}return true}
 
+/* ---------- 功率校正紀錄 ----------
+   下控每 100 ms 送一筆 STATUS_REPORT，紀錄期間全部留下。
+   標記與參考功率機讀值取當下輸入框的內容寫進每一列，操作者在每個測試點
+   先填好再保持數秒，事後就能用標記把 CSV 的列與功率機讀值對起來。 */
+let recOn=false, recRows=[], recT0=0;
+const REC_MAX=200000; // 10 Hz 下約 5.5 小時，超過就停止避免記憶體無限成長
+
+function recPaint(){
+  $('recState').textContent = recOn ? '紀錄中' : (recRows.length ? '已停止' : '未紀錄');
+  $('recCount').textContent = recRows.length + ' 筆';
+}
+function recSample(st){
+  if(!recOn) return;
+  if(recRows.length>=REC_MAX){recOn=false;logLine('紀錄已達上限 '+REC_MAX+' 筆，自動停止。');recPaint();return}
+  const now=Date.now();
+  recRows.push({
+    t:new Date(now).toLocaleTimeString('zh-TW',{hour12:false})+'.'+String(now%1000).padStart(3,'0'),
+    el:((now-recT0)/1000).toFixed(1),
+    tag:$('recTag').value.trim(),
+    ref:$('recRef').value.trim(),
+    st:st
+  });
+  if(recRows.length%10===0) recPaint();
+}
+function recToggle(){
+  recOn=!recOn;
+  if(recOn){ if(!recRows.length) recT0=Date.now(); logLine('開始紀錄'); }
+  else logLine('停止紀錄，共 '+recRows.length+' 筆');
+  $('recBtn').textContent = recOn ? '停止紀錄' : '開始紀錄';
+  recPaint();
+}
+function recExport(){
+  if(!recRows.length){logLine('尚無紀錄可匯出。');return}
+  const head=['時間','經過秒數','標記','參考功率機W','rpm','est_current_mA','est_watt',
+              'duty_x10','duty_%','target_value','mode','status','status_text','error','error_text'];
+  const esc=v=>{const s=String(v==null?'':v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s};
+  const lines=[head.join(',')];
+  for(const r of recRows){
+    const s=r.st;
+    lines.push([r.t,r.el,r.tag,r.ref,s.rpm,s.est_current_mA,s.est_watt,
+      s.duty_x10,(s.duty_x10/10).toFixed(1),s.target_value,s.modeName,
+      '0x'+s.status.toString(16).padStart(2,'0'),s.statusText,
+      '0x'+s.error.toString(16).padStart(4,'0'),s.errorText].map(esc).join(','));
+  }
+  // 加 BOM，Excel 開啟中文才不會亂碼
+  const blob=new Blob(['﻿'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  const d=new Date(), p=n=>String(n).padStart(2,'0');
+  a.href=url;
+  a.download=`ems_power_cal_${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+  logLine('已匯出 '+recRows.length+' 筆');
+}
+function recClear(){
+  if(recRows.length && !confirm('確定清除已收集的 '+recRows.length+' 筆紀錄？')) return;
+  recRows=[];recOn=false;$('recBtn').textContent='開始紀錄';logLine('已清除紀錄');recPaint();
+}
+
 $('openBtn').onclick=openPort;
 $('closeBtn').onclick=closePort;
 $('hbMs').onchange=()=>{if(session)session.setHeartbeatInterval(Number($('hbMs').value))};
@@ -326,7 +409,12 @@ $('sendBtn').onclick=async()=>{
   logLine('TX  '+formatHex(pkt));
   paintState();
 };
+$('recBtn').onclick=recToggle;
+$('recExportBtn').onclick=recExport;
+$('recClearBtn').onclick=recClear;
+
 paintState();
+recPaint();
 </script>
 </body>
 </html>
