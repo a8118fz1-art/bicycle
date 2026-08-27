@@ -5,12 +5,14 @@
         四顆按鍵調目標值與啟停，OLED 顯示下控回報的即時狀態，
         以及測試時最關心的東西：ACK 結果、ERROR 旗標、鏈路是否還活著。
 
-  硬體：BLE-Nano 4.2（ATmega328P-AU QFP32 + BLE 4.2 模組，Type-C）
+  硬體：任何 ATmega328P 的 Nano 皆可 —— 一般版 Nano 或 BLE-Nano 4.2 都行。
+        程式不使用藍牙，D0/D1 只拿來吐 ASCII 遙測；一般版走 USB、
+        BLE-Nano 則是 USB 與藍牙模組同時收得到。腳位與行為完全相同。
         0.96" SSD1306 128x64 OLED（硬體 I2C，位址 0x3C）
         4 顆按鍵（INPUT_PULLUP，按下 = LOW）
 
   接線：
-        D0 / D1        BLE 模組 @115200（本檔只用來吐 ASCII 遙測，不走協定）
+        D0 / D1        USB 序列埠 @115200（只吐 ASCII 遙測，不走協定）
         D8  = RX       ← EMS 下控 TX      AltSoftSerial，@19200 8-N-1
         D9  = TX       → EMS 下控 RX      （D8/D9 在 328P 上是固定的，改不了）
         A4 / A5        OLED I2C
@@ -21,7 +23,7 @@
 
   兩條線的分工要分清楚，不要弄反：
         AltSoftSerial（D8/D9）＝ EMS 二進位協定，只跑封包
-        Serial（D0/D1）        ＝ BLE，只吐 ASCII 遙測
+        Serial（D0/D1）        ＝ USB，只吐 ASCII 遙測
         舊案 master.ino 就是在這裡踩過雷：離開 AT 模式後的 Serial.println()
         會直接變成資料送給對端。這裡兩條線是分開的，所以 Serial 可以自由印。
 
@@ -44,8 +46,9 @@
 #include <stdarg.h>
 
 /* ==================== 設定 ==================== */
+#define FW_VERSION         "0.3"  // 顯示在待機畫面上，回報問題時用來對版本
 #define EMS_BAUD          19200   // 通訊協定 §2
-#define BLE_BAUD         115200   // 模組 UART（舊案 master.ino 的實測值）
+#define TELEM_BAUD       115200   // D0/D1 遙測輸出速率
 #define OLED_ADDR          0x3C
 
 #define HEARTBEAT_MS       1000   // 協定 §12 標稱 100ms，廠商說 1 秒即可；對 3 秒逾時有 3 倍餘裕
@@ -53,7 +56,7 @@
 #define LINK_TIMEOUT_MS    1000   // 下控 STATUS 週期 100ms，1 秒沒收到視為斷線
 #define TGT_PUSH_MS         250   // 目標值連續調整時的送出節流
 #define OLED_REFRESH_MS     150
-#define TELEMETRY_MS        500   // BLE ASCII 遙測週期，設 0 關閉
+#define TELEMETRY_MS        500   // ASCII 遙測週期，設 0 關閉
 /*
   設 1 之後，每收到一筆 STATUS_REPORT 就從 D0/D1 吐一行 "R,<millis>,<rpm>"（10Hz）。
   用來抓 RPM 飄動的原始波形：開序列埠監控存成檔，就能看出是隨機雜訊、
@@ -672,7 +675,7 @@ static void render() {
   } else {
     /* 還沒收到下控封包時（上機第一階段），把剩餘 RAM 秀出來當健康檢查 */
     strcpy_P(L[1], PSTR("waiting for STATUS"));
-    snprintf_P(L[2], sizeof(L[2]), PSTR("CRC ERR %u"), (unsigned)crcErrCnt);
+    snprintf_P(L[2], sizeof(L[2]), PSTR("FW " FW_VERSION "  CRC ERR %u"), (unsigned)crcErrCnt);
     snprintf_P(L[3], sizeof(L[3]), PSTR("FREE RAM %u"), (unsigned)ramHeadroom());
   }
 
@@ -695,7 +698,7 @@ static void render() {
   } while (oled.nextPage());
 }
 
-/* ==================== BLE ASCII 遙測 ==================== */
+/* ==================== ASCII 遙測 ==================== */
 #if TELEMETRY_MS
 static void telemetry() {
   /* Serial 這條線只有 ASCII，跟 EMS 的二進位協定完全分開 */
@@ -722,7 +725,7 @@ void setup() {
 
   for (uint8_t i = 0; i < 4; i++) pinMode(PIN_BTN[i], INPUT_PULLUP);
 
-  Serial.begin(BLE_BAUD);
+  Serial.begin(TELEM_BAUD);
   ems.begin(EMS_BAUD);
 
   oled.begin();
