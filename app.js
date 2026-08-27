@@ -141,6 +141,13 @@ function createUartSession(){
       $("powerText").textContent=st.est_watt>0?st.est_watt+" W":"--";
       $("resistanceText").textContent=`${st.modeName} ${st.target_value}`;
       $("flagsText").textContent=`${st.statusText} / ERR:${st.errorText}`;
+      // ui.js 的 syncLive() 與所有測試模式取樣讀的是 #correctedRpm 與 #wattText，
+      // 先前只有 BLE 路徑會寫這兩個，UART 模式下畫面 RPM / WATT 與 3-STEP、WINGATE、
+      // INTERMITTENT 的取樣全部拿不到值。下控回報的已是飛輪實際轉速，
+      // 不需要像 BLE 那樣由車速換算，直接就是修正後的 RPM。
+      $("correctedRpm").textContent=st.rpm>0?st.rpm.toFixed(1):"--";
+      $("wattText").textContent=st.est_watt>0?st.est_watt.toFixed(1)+" W":"--";
+      latestRpm=st.rpm;
     },
     onAck:info=>serialLog(`ACK: ${info.cmdName} → ${info.resultName}`),
     onError:info=>status(`下控回報錯誤：${info.text}`)
