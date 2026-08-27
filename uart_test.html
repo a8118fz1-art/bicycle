@@ -197,15 +197,25 @@
       <div class="cell"><b>已收集</b><span id="recCount">0</span></div>
     </div>
 
-    <h2 style="margin-top:18px">7 · ERG 逐點掃描</h2>
+    <h2 style="margin-top:18px">7 · 逐點掃描（DUTY / ERG / KP）</h2>
     <p class="note" style="margin-top:0">
-      ERG 是閉迴路，下控會把 duty 調到<b>它自己算的</b> est_watt 等於目標值，所以 est_watt 必然貼近
-      target，看不出誤差。<b>有效資訊是「功率機實際讀值」與「目標值」的差距</b>，那才是下控扭力表要修正的量。<br>
+      <b>要產出給下控廠商的特性表，請用 DUTY 模式。</b>DUTY 是開迴路：你指定 duty，
+      下控照做，`est_watt` 是它<b>獨立算出來的估計值</b>，跟功率機讀值一比就是它的誤差。<br>
+      ERG 不能用來做這件事 —— 它是閉迴路，下控會把 duty 調到它自己算的 est_watt 等於目標值，
+      所以 est_watt 必然貼近 target，<b>誤差被迴路吃掉了看不出來</b>。ERG 掃描只能驗證
+      「目標值 vs 功率機讀值」的差距，不能反推扭力表。<br>
       扭力表是電流 × 轉速的二維表，<b>請在多個迴轉數各掃一輪</b>，只掃單一 RPM 的修正只在該轉速成立。
-      另外 duty 到 100.0% 代表下控已達不到目標，那些點無效，匯出後請剔除。
+      ERG 模式下 duty 到 100.0% 代表下控已達不到目標，那些點無效，匯出後請剔除。<br>
+      CSV 會自動帶入 <b>GET_SYSTEM_INFO 回報的供電電壓</b>：同一個 duty 在 24V 與 32V 下電流不同，
+      沒有這個欄位的校正資料無法解讀。
     </p>
     <div class="row">
-      <input id="sweepList" type="text" value="50,100,150,200,250,300" aria-label="目標瓦特清單" placeholder="目標瓦特 逗號分隔" />
+      <select id="sweepMode" aria-label="掃描模式">
+        <option value="2" selected>DUTY %</option>
+        <option value="1">ERG W</option>
+        <option value="0">KP</option>
+      </select>
+      <input id="sweepList" type="text" value="5,10,20,30,40,50,60,70,80,90,100" aria-label="目標值清單" placeholder="目標值 逗號分隔" />
       <input id="sweepRpm" type="text" value="60" aria-label="目前迴轉數" placeholder="目前 RPM 例 60" />
       <input id="sweepHold" type="number" value="5" min="1" aria-label="保持秒數" placeholder="保持秒數" />
     </div>
@@ -344,6 +354,23 @@ function needSession(){if(!session){logLine('請先開啟串口。');return fals
    標記與參考功率機讀值取當下輸入框的內容寫進每一列，操作者在每個測試點
    先填好再保持數秒，事後就能用標記把 CSV 的列與功率機讀值對起來。 */
 let recOn=false, recRows=[], recT0=0;
+/* 供電電壓。VIN 不在 STATUS_REPORT 裡，要另外用 GET_SYSTEM_INFO 問（回應是 0x81，
+   不是 ACK，uart_session.js 的 onFrame 已處理）。校正資料少了供電電壓無法解讀 ——
+   同一個 duty 在 24V 與 32V 下電流不同，廠商拿到沒有電壓的表也修不了。 */
+let recVin='';
+async function recQueryVin(){
+  if(!session){ recVin=''; return }
+  const r=await session.getSystemInfo();
+  if(r && r.data && r.data.length>=5){
+    /* 實機以 mV 回報（24V 供電實測 24030），與附錄 A-10 範例隱含的 0.01V 不符。
+       依實機解讀，詳見 PROTOCOL_NOTES 待確認事項第 12 條。 */
+    recVin=(((r.data[0]|(r.data[1]<<8)))/1000).toFixed(2);
+    logLine(`SYSTEM_INFO：VIN ${recVin} V，FW ${r.data[2]}.${r.data[3]}.${r.data[4]}`);
+  }else{
+    recVin='';
+    logLine('GET_SYSTEM_INFO 無回應，CSV 的供電電壓欄將留空。');
+  }
+}
 const REC_MAX=200000; // 10 Hz 下約 5.5 小時，超過就停止避免記憶體無限成長
 
 function recPaint(){
@@ -359,6 +386,7 @@ function recSample(st){
     el:((now-recT0)/1000).toFixed(1),
     tag:$('recTag').value.trim(),
     ref:$('recRef').value.trim(),
+    vin:recVin,
     st:st
   });
   recPaint();  // 10 Hz 下每筆重畫兩個 textContent，成本可忽略；分批更新會讓操作者以為沒在收
@@ -372,13 +400,13 @@ function recToggle(){
 }
 function recExport(){
   if(!recRows.length){logLine('尚無紀錄可匯出。');return}
-  const head=['時間','經過秒數','標記','參考功率機W','rpm','est_current_mA','est_watt',
+  const head=['時間','經過秒數','標記','參考功率機W','供電VIN_V','rpm','est_current_mA','est_watt',
               'duty_x10','duty_%','target_value','mode','status','status_text','error','error_text'];
   const esc=v=>{const s=String(v==null?'':v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s};
   const lines=[head.join(',')];
   for(const r of recRows){
     const s=r.st;
-    lines.push([r.t,r.el,r.tag,r.ref,s.rpm,s.est_current_mA,s.est_watt,
+    lines.push([r.t,r.el,r.tag,r.ref,r.vin,s.rpm,s.est_current_mA,s.est_watt,
       s.duty_x10,(s.duty_x10/10).toFixed(1),s.target_value,s.modeName,
       '0x'+s.status.toString(16).padStart(2,'0'),s.statusText,
       '0x'+s.error.toString(16).padStart(4,'0'),s.errorText].map(esc).join(','));
@@ -444,12 +472,27 @@ $('sendBtn').onclick=async()=>{
   logLine('TX  '+formatHex(pkt));
   paintState();
 };
-/* ---------- ERG 逐點掃描 ----------
+/* ---------- 逐點掃描 ----------
    半自動：換點由程式送出 SET_CONTROL 並打好標記，功率機讀值仍由操作者輸入，
-   因為那個數值來自外部儀器。倒數只是提示保持時間已足夠，不會自動換點。 */
-let swList=[], swIdx=-1, swTimer=null, swLeft=0;
+   因為那個數值來自外部儀器。倒數只是提示保持時間已足夠，不會自動換點。
 
-function swTag(){ return `ERG ${swList[swIdx]}W @${$('sweepRpm').value.trim()||'?'}rpm`; }
+   清單填的是「人看的單位」（KP 0~14、ERG 瓦特、DUTY 百分比），
+   ×10 的編碼交給 uart_session.js 的 encodeTarget() 處理，這裡不要自己乘。 */
+const SW_MODE={
+  0:{name:'KP',   unit:'',  max:14,   list:'1,2,3,4,5,6,7,8,9,10,11,12,13,14'},
+  1:{name:'ERG',  unit:'W', max:3000, list:'50,100,150,200,250,300'},
+  2:{name:'DUTY', unit:'%', max:100,  list:'5,10,20,30,40,50,60,70,80,90,100'}
+};
+let swList=[], swIdx=-1, swTimer=null, swLeft=0;
+/* 掃描期間鎖定的模式。不直接讀下拉選單，免得操作者中途改選導致
+   收尾的 safeZero 用到跟開始時不同的模式。 */
+let swModeActive=2;
+
+function swCfg(m){ return SW_MODE[m===undefined?Number($('sweepMode').value):m]; }
+function swTag(){
+  const c=SW_MODE[swModeActive];
+  return `${c.name} ${swList[swIdx]}${c.unit} @${$('sweepRpm').value.trim()||'?'}rpm`;
+}
 function swPaint(hint){
   $('sweepProg').textContent = swIdx<0 ? '--' : `第 ${swIdx+1} / ${swList.length} 點`;
   $('sweepPoint').textContent = swIdx<0 ? '--' : swTag();
@@ -467,17 +510,20 @@ function swCountdown(){
 }
 async function swGoto(i){
   swIdx=i;
-  const w=swList[i];
+  const v=swList[i];
   $('recTag').value=swTag();
-  const ok=await session.setTarget(EMS_MODE.ERG,w);   // 未 RUNNING 時會自動補 SET_CONTROL + START
+  const ok=await session.setTarget(swModeActive,v);   // 未 RUNNING 時會自動補 SET_CONTROL + START
   if(!ok){ swPaint('送出目標失敗，請看封包記錄'); return }
-  logLine(`掃描第 ${i+1}/${swList.length} 點：ERG ${w} W`);
+  logLine(`掃描第 ${i+1}/${swList.length} 點：${swTag()}`);
   swCountdown();
 }
 async function swStart(){
   if(!needSession()) return;
-  swList=$('sweepList').value.split(/[,，\s]+/).map(s=>Number(s)).filter(n=>Number.isFinite(n)&&n>=0&&n<=3000);
-  if(!swList.length){ swPaint('目標清單無效，請填 0~3000 之間的數字'); return }
+  swModeActive=Number($('sweepMode').value);
+  const c=SW_MODE[swModeActive];
+  swList=$('sweepList').value.split(/[,，\s]+/).map(s=>Number(s)).filter(n=>Number.isFinite(n)&&n>=0&&n<=c.max);
+  if(!swList.length){ swPaint(`目標清單無效，請填 0~${c.max}${c.unit} 之間的數字`); return }
+  await recQueryVin();             // 校正資料一定要帶供電電壓
   if(!recOn) recToggle();          // 掃描一定要有紀錄，沒開就自動開
   $('recRef').value='';
   await swGoto(0);
@@ -492,7 +538,7 @@ async function swNext(){
 async function swEnd(){
   if(swIdx>=0) recApplyRef(swTag());
   clearInterval(swTimer); swTimer=null;
-  if(session){ await session.safeZero(EMS_MODE.ERG); }
+  if(session){ await session.safeZero(swModeActive); }
   swIdx=-1; swList=[];
   $('recRef').value='';
   swPaint('掃描結束，已送出目標歸零與 STOP。可按「匯出 CSV」。');
@@ -500,11 +546,17 @@ async function swEnd(){
   if(recOn) recToggle();
 }
 
+$('sweepMode').onchange=()=>{
+  if(swIdx>=0){ $('sweepMode').value=String(swModeActive); swPaint('掃描進行中，請先結束再換模式'); return }
+  const c=swCfg();
+  $('sweepList').value=c.list;
+  swPaint(`已切換為 ${c.name} 模式，清單範圍 0~${c.max}${c.unit}`);
+};
 $('sweepStartBtn').onclick=swStart;
 $('sweepNextBtn').onclick=swNext;
 $('sweepEndBtn').onclick=swEnd;
 
-$('recBtn').onclick=recToggle;
+$('recBtn').onclick=async()=>{ if(!recOn) await recQueryVin(); recToggle(); };
 $('recExportBtn').onclick=recExport;
 $('recClearBtn').onclick=recClear;
 
