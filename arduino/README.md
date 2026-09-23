@@ -11,6 +11,7 @@
 **硬體**：BLE-Nano 4.2（ATmega328P-AU）+ SSD1306 128x64 OLED + 4 顆按鍵
 **相依**：U8g2、AltSoftSerial
 **燒錄**：開發板 Arduino Nano，處理器 ATmega328P（失敗改 Old Bootloader）
+**版本**：待機畫面第三行顯示 `FW x.y`，燒完先看這裡確認新版有進去
 
 按鍵與接線見 `docs/` 下的操作說明。
 

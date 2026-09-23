@@ -390,7 +390,7 @@ RPM 54-6843 n710
           <td class="k"><span class="key">↑</span></td><td class="k"><code>D7</code></td>
           <td class="k">目標值 +</td>
           <td>增加一格</td>
-          <td>連續遞增，按住約 2 秒後加速 8 倍</td>
+          <td>連續遞增，按住約 2 秒後加速。KP / ERG 加速 8 倍，<b>DUTY 加速 80 倍</b>（步進小 10 倍，掃速維持 8.0 %/次）</td>
         </tr>
         <tr>
           <td class="k"><span class="key">↓</span></td><td class="k"><code>D6</code></td>
@@ -424,7 +424,7 @@ RPM 54-6843 n710
       <tbody>
         <tr><td class="k"><b>KP</b></td><td class="k">0.0 – 14.0</td><td class="k">0.1</td><td>數值 ×10（5.0 → <code>50</code>）</td></tr>
         <tr><td class="k"><b>ERG</b></td><td class="k">0 – 3000 W</td><td class="k">5 W</td><td>直接是瓦特（250 → <code>250</code>）</td></tr>
-        <tr><td class="k"><b>DUTY</b></td><td class="k">0 – 100 %</td><td class="k">1.0 %</td><td>數值 ×10（50% → <code>500</code>）</td></tr>
+        <tr><td class="k"><b>DUTY</b></td><td class="k">0 – 100 %</td><td class="k">0.1 %</td><td>數值 ×10（50% → <code>500</code>，2.4% → <code>24</code>）</td></tr>
       </tbody>
     </table>
   </div>
@@ -473,12 +473,18 @@ RPM 54-6843 n710
       <tbody>
         <tr>
           <td class="k"><code>ACK TIMEOUT &lt;指令&gt;</code></td>
-          <td><b>送出後 600 毫秒內沒有任何回應。</b>下控沒收到，或收到了但不回應。</td>
+          <td><b>送出後 600 毫秒內沒有任何回應。</b>下控沒收到，或收到了但不回應。<br>若逾時的是<b>目標值推送</b>（調整 ↑ ↓ 觸發的 SETCTL），本機會自動補送，最多三次。</td>
         </tr>
         <tr>
           <td class="k"><code>LATE ACK &lt;指令&gt; r&lt;n&gt;</code></td>
           <td><b>逾時之後才收到 ACK。</b><code>n</code> 是上表的協定值。
               出現這個代表下控<b>有回應、只是超過 600ms</b> —— 與「完全沒回」是不同的問題。</td>
+        </tr>
+        <tr>
+          <td class="k"><code>SET FAILED, RETRY</code></td>
+          <td><b>目標值補送三次都沒收到 ACK，已放棄。</b>本機設定值與下控實際採用的值不一致，
+              標題列會留著 <span class="m">*</span>。此時畫面上的 duty 不代表下控真正在跑的 duty，
+              <b>該筆量測作廢</b>，請重調一次目標值。</td>
         </tr>
         <tr>
           <td class="k"><code>LINK LOST</code></td>

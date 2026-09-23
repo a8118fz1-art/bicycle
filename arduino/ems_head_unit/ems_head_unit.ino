@@ -1,5 +1,5 @@
 /*
-  ems_head_unit.ino — EMS Bike 獨立測試用手把單元 (v0.3)
+  ems_head_unit.ino — EMS Bike 獨立測試用手把單元 (v0.4)
 
   用途：不接電腦、不開瀏覽器，單機把 EMS 下控完整操一遍。
         四顆按鍵調目標值與啟停，OLED 顯示下控回報的即時狀態，
@@ -46,7 +46,7 @@
 #include <stdarg.h>
 
 /* ==================== 設定 ==================== */
-#define FW_VERSION         "0.3"  // 顯示在待機畫面上，回報問題時用來對版本
+#define FW_VERSION         "0.4"  // 顯示在待機畫面上，回報問題時用來對版本
 #define EMS_BAUD          19200   // 通訊協定 §2
 #define TELEM_BAUD       115200   // D0/D1 遙測輸出速率
 #define OLED_ADDR          0x3C
@@ -55,6 +55,7 @@
 #define ACK_TIMEOUT_MS      600   // 同 uart_session.js 的 ackTimeoutMs
 #define LINK_TIMEOUT_MS    1000   // 下控 STATUS 週期 100ms，1 秒沒收到視為斷線
 #define TGT_PUSH_MS         250   // 目標值連續調整時的送出節流
+#define TGT_SET_RETRY         3   // SET_CONTROL 沒收到 ACK 時最多補送幾次
 #define OLED_REFRESH_MS     150
 #define TELEMETRY_MS        500   // ASCII 遙測週期，設 0 關閉
 /*
@@ -112,7 +113,9 @@ enum : uint8_t { MODE_KP = 0, MODE_ERG = 1, MODE_DUTY = 2 };
   DUTY : 0.1% 為單位，0~1000 = 0.0~100.0%
 */
 static const uint16_t TGT_MAX[3]  = { 140, 3000, 1000 };
-static const uint16_t TGT_STEP[3] = {   1,    5,   10 };
+/* DUTY 用 1（＝0.1%）是為了掃低 duty 段 —— 驅動在 duty 2~3 之間電流一步跳 18 mA，
+   1% 的解析度根本切不進去。長按時的跳幅由 accel() 補回來，手感與先前相同。 */
+static const uint16_t TGT_STEP[3] = {   1,    5,    1 };
 
 static const char MODE_N0[] PROGMEM = "KP";
 static const char MODE_N1[] PROGMEM = "ERG";
@@ -240,6 +243,7 @@ static uint8_t seq = SQ_NONE;
 
 static bool     tgtDirty = false;
 static uint32_t tgtDirtyAt = 0;
+static uint8_t  tgtRetry = 0;     // SET_CONTROL 沒收到 ACK 時已經補送幾次
 
 /*
   §14 開機序列的查詢結果。這兩個指令「不回 ACK」，是直接回資料包
@@ -299,6 +303,7 @@ static const char M_UP[]      PROGMEM = "LINK UP";
 static const char M_BUSY[]    PROGMEM = "BUSY, WAIT";
 static const char M_RUNMODE[] PROGMEM = "STOP FIRST";
 static const char M_ARMED[]   PROGMEM = "ALREADY RUNNING";
+static const char M_SETFAIL[] PROGMEM = "SET FAILED, RETRY";
 
 /*
   下控是否「確認」還在 RUNNING。
@@ -589,9 +594,15 @@ static void bumpTarget(int8_t dir, uint8_t mult) {
   else         target = (uint16_t)((target < step) ? 0 : target - step);
   tgtDirty   = true;
   tgtDirtyAt = millis();
+  tgtRetry   = 0;
 }
 
-static inline uint8_t accel(uint8_t i) { return bs[i].repCount > 15 ? 8 : 1; }
+/* DUTY 的 TGT_STEP 是其他模式的 1/10，長按倍率就放大 10 倍回去，
+   讓「按住」的跳幅維持在 8.0%/次，只有「點一下」變細成 0.1%。 */
+static inline uint8_t accel(uint8_t i) {
+  if (bs[i].repCount <= 15) return 1;
+  return (mode == MODE_DUTY) ? 80 : 8;
+}
 
 static void cycleMode() {
   if (confirmedRunning()) { setMsgP(M_RUNMODE); return; }   // 跑的時候不給換模式
@@ -759,6 +770,13 @@ void loop() {
     char cn[8];
     cmdName(cn, sizeof(cn), pendCmd);
     setMsgF(PSTR("ACK TIMEOUT %s"), cn);
+    /* 單純的目標值推送掉了就自己補送。原本這裡直接放掉，畫面上的設定值與下控
+       實際採用的值會就此分家（只剩標題列的 * 提示），掃點時等於整筆作廢。
+       arm/stop 那幾個序列不在此列 —— 它們有使用者按鍵當重試。 */
+    if (pendCmd == CMD_SET_CONTROL && seq == SQ_SET) {
+      if (tgtRetry < TGT_SET_RETRY) { tgtRetry++; tgtDirty = true; tgtDirtyAt = now; }
+      else                            setMsgP(M_SETFAIL);
+    }
     pendCmd = 0;
     seq     = SQ_NONE;
   }
