@@ -23,6 +23,7 @@ STABLE_STD = 0.35     # 扭力標準差上限 N·m
 RATIO      = 15.0119  # 52/16 × 97/21，與 app.js 相同
 MAX_RMS    = 3.0      # 對齊後轉速 RMS 超過這個值 = 兩個檔案不是同一次測試
 HEADER_OFF = -1.5     # 轉速有變化的各輪對出來都在 -0.9～-2.5 秒；轉速不變時直接用這個值
+MIN_OVERLAP = 120     # 對齊時至少要重疊的點數（0.5 秒一點 = 60 秒）；功率機常比記錄頁早開很久
 VIN_MIN    = 23.0     # 平台內 VIN 低於這個值 = 電源掉壓，數據作廢
 
 def model_net(duty, cad):
@@ -99,7 +100,7 @@ def align(seg, S, guess):
             v = interp(cad, off + t)
             if v is None: continue
             err += (v - rpm) ** 2; n += 1
-        if n < len(pts) * 0.5: continue
+        if n < min(len(pts) * 0.5, MIN_OVERLAP): continue
         e = err / n
         if best is None or e < best[0]:
             best = (e, off, n)
@@ -118,7 +119,7 @@ def align_current(seg, S, guess):
             v = interp(cur, off + t)
             if v is None: continue
             xs.append(v); ys.append(tq)
-        if len(xs) < len(pts) * 0.5 or len(set(xs)) < 2: continue
+        if len(xs) < min(len(pts) * 0.5, MIN_OVERLAP) or len(set(xs)) < 2: continue
         mx, my = statistics.mean(xs), statistics.mean(ys)
         sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
         sxx = sum((x - mx) ** 2 for x in xs); syy = sum((y - my) ** 2 for y in ys)
@@ -200,6 +201,7 @@ def main():
             hs = [s for s in S if ta <= s[0] <= tb]
             hc = statistics.mean(s[2] for s in hs) if hs else float('nan')
             hm = statistics.mean(s[4] for s in hs) if hs else float('nan')
+            hsd = statistics.pstdev(s[4] for s in hs) if len(hs) > 1 else float('nan')
             ok = '✔' if (sd <= STABLE_STD and ks >= MIN_KEEP_S) else '請重測'
             vins = [s[7] for s in S if ta - 5 <= s[0] <= tb and s[7]]   # VIN 只在 LINK UP 後更新，往前多看 5 秒
             if vins and min(vins) < VIN_MIN:
@@ -207,7 +209,7 @@ def main():
             rows.append(dict(seg=i, n=k, duty=d, rpm=round(statistics.mean(rp), 3),
                                 torque=round(statistics.mean(tq), 4), power=round(statistics.mean(pw), 2),
                                 torque_sd=round(sd, 4), keep_s=round(ks, 1),
-                                head_cadence=round(hc, 3), head_ma=round(hm, 1),
+                                head_cadence=round(hc, 3), head_ma=round(hm, 1), head_ma_sd=round(hsd, 1),
                                 t_from=datetime.fromtimestamp(ta).strftime('%H:%M:%S'),
                                 t_to=datetime.fromtimestamp(tb).strftime('%H:%M:%S'), ok=ok))
         # 同一輪的 duty 0 平台擬合 tare = a + b·轉速；只有一點就當常數
@@ -220,7 +222,7 @@ def main():
             tare = lambda c, v=statistics.mean(t[1] for t in tares): v
         else:
             tare = None
-        print('  #  duty%  轉速    扭力     功率    扭力σ  有效秒  手把踏頻  電流mA   淨扭力  模型淨扭力   差    判定')
+        print('  #  duty%  轉速    扭力     功率    扭力σ  有效秒  手把踏頻  電流mA ±σ    淨扭力  模型淨扭力   差    判定')
         for r in rows:
             net = mod = dif = None
             if tare and r['duty'] > 0:
@@ -232,7 +234,7 @@ def main():
                      diff_pct=None if dif is None else round(dif, 2))
             tail = f'{net:7.3f}   {mod:7.3f}   {dif:+6.2f}%' if net is not None else ' ' * 30
             print(f' {r["n"]:2d}  {r["duty"]:5.1f}  {r["rpm"]:5.2f}  {r["torque"]:7.3f}  {r["power"]:7.1f}  '
-                  f'{r["torque_sd"]:5.3f}  {r["keep_s"]:5.1f}   {r["head_cadence"]:6.2f}   {r["head_ma"]:5.0f}  {tail}  {r["ok"]}')
+                  f'{r["torque_sd"]:5.3f}  {r["keep_s"]:5.1f}   {r["head_cadence"]:6.2f}   {r["head_ma"]:5.0f} ±{r["head_ma_sd"]:<4.0f} {tail}  {r["ok"]}')
         if tare is None:
             print('  （這一輪沒有 duty 0 平台，無法扣 tare）')
         results += rows

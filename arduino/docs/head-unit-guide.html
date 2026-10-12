@@ -403,9 +403,11 @@ RPM 54-6843 n710
           <td class="k"><b>開始</b></td>
           <td><b>送出 SET_CONTROL → START</b><br>
               <span style="color:var(--ink-soft);font-size:13px">FAULT 狀態下：第一次按送 <code>RESET_ERROR</code>；
-              若錯誤清不掉，<b>再按一次會強制送出啟動序列</b></span></td>
+              若錯誤清不掉，<b>再按一次會強制送出啟動序列</b></span><br>
+              <span style="color:var(--ink-soft);font-size:13px"><b>DUTY 運轉中（FW 0.6 起）：開／關「降阻力前自動歸零」</b>——開啟後每次往下調，先送 duty 0、停設定的秒數、再送新值；狀態列顯示 <code>RUN+D</code>（磁滯測試用）</span></td>
           <td>切換模式 KP → ERG → DUTY<br>
-              <span style="color:var(--ink-soft);font-size:13px">運轉中不允許，會顯示 <code>STOP FIRST</code></span></td>
+              <span style="color:var(--ink-soft);font-size:13px">運轉中不允許，會顯示 <code>STOP FIRST</code></span><br>
+              <span style="color:var(--ink-soft);font-size:13px"><b>DUTY 運轉中（FW 0.6 起）：換歸零長度</b> 0.5 → 1 → 2 → 5 秒（預設 1 秒）</span></td>
         </tr>
         <tr>
           <td class="k"><span class="key">#</span></td><td class="k"><code>D4</code></td>
@@ -447,6 +449,10 @@ RPM 54-6843 n710
         <tr><td class="k"><code>STOPPED</code></td><td>STOP 已被接受</td></tr>
         <tr><td class="k"><code>SAFE ZERO DONE</code></td><td>目標歸零加 STOP 都完成</td></tr>
         <tr><td class="k"><code>ERROR CLEARED</code></td><td>RESET_ERROR 已被接受</td></tr>
+        <tr><td class="k"><code>DIP LEN 1.0s</code></td><td>短暫歸零的長度已改成 1.0 秒</td></tr>
+        <tr><td class="k"><code>AUTO DIP ON 1.0s</code> / <code>OFF</code></td><td>降阻力前自動歸零：開啟（歸零 1.0 秒）／關閉</td></tr>
+        <tr><td class="k"><code>DIP 0 FOR 1.0s</code></td><td>偵測到往下調，開始歸零（計時從下控 ACK 起算）</td></tr>
+        <tr><td class="k"><code>DIP END, TO 30.0%</code></td><td>歸零結束，送出新的目標值</td></tr>
       </tbody>
     </table>
   </div>

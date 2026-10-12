@@ -46,7 +46,7 @@
 #include <stdarg.h>
 
 /* ==================== 設定 ==================== */
-#define FW_VERSION         "0.5"  // 顯示在待機畫面上，回報問題時用來對版本
+#define FW_VERSION         "0.6"  // 顯示在待機畫面上，回報問題時用來對版本
 #define EMS_BAUD          19200   // 通訊協定 §2
 #define TELEM_BAUD       115200   // D0/D1 遙測輸出速率
 #define OLED_ADDR          0x3C
@@ -246,9 +246,23 @@ static uint32_t pendAt  = 0;
 
 /* 動作序列。對應 uart_session.js 的 arm() / stop() / safeZero() */
 enum : uint8_t {
-  SQ_NONE, SQ_ARM_SET, SQ_ARM_START, SQ_SET, SQ_STOP, SQ_ZERO_SET, SQ_ZERO_STOP, SQ_RESET
+  SQ_NONE, SQ_ARM_SET, SQ_ARM_START, SQ_SET, SQ_STOP, SQ_ZERO_SET, SQ_ZERO_STOP, SQ_RESET,
+  SQ_DIP
 };
 static uint8_t seq = SQ_NONE;
+
+/* 磁滯測試用「降阻力前自動歸零」：DUTY 模式跑著時點一下 START 切換開關。
+   開啟後，只要送出的新目標值比上一次送出的低，就先送 duty 0、
+   停 DIP_MS[dipIdx] 毫秒、再送新值 —— 這正是要建議廠商做進韌體的邏輯，
+   用來量最短要歸零多久才能消掉磁滯。長按 START 換長度。 */
+static const uint16_t DIP_MS[] PROGMEM = { 500, 1000, 2000, 5000 };
+#define DIP_N (sizeof(DIP_MS) / sizeof(DIP_MS[0]))
+static bool     dipAuto  = false;
+static uint8_t  dipIdx   = 1;     // 預設 1 秒
+static uint8_t  dipPhase = 0;     // 0 = 沒在歸零，1 = 待送 0，2 = 歸零中
+static uint8_t  dipRetry = 0;
+static uint32_t dipT0    = 0;
+static uint16_t lastSent = 0;     // 最後一次送給下控的 SET_CONTROL 目標值
 
 static bool     tgtDirty = false;
 static uint32_t tgtDirtyAt = 0;
@@ -348,6 +362,7 @@ static void sendAwait(uint8_t cmd, const uint8_t *data, uint8_t n) {
 }
 
 static void sendSetControl(uint16_t t) {
+  lastSent = t;
   uint8_t d[3] = { mode, (uint8_t)(t & 0xFF), (uint8_t)(t >> 8) };
   sendAwait(CMD_SET_CONTROL, d, 3);
 }
@@ -421,6 +436,8 @@ static void onAck(uint8_t cmd, uint8_t result) {
       break;
     case SQ_ARM_START:  seq = SQ_NONE; setMsgP(M_ON);      break;
     case SQ_SET:        seq = SQ_NONE;                     break;
+    /* 歸零計時從下控 ACK 開始算，不從送出算 */
+    case SQ_DIP:        seq = SQ_NONE; dipT0 = millis();   break;
     case SQ_STOP:       seq = SQ_NONE; setMsgP(M_STOPPED); break;
     case SQ_ZERO_SET:   sendAwait(CMD_STOP, NULL, 0); seq = SQ_ZERO_STOP; break;
     case SQ_ZERO_STOP:  seq = SQ_NONE; setMsgP(M_ZERO);    break;
@@ -670,7 +687,7 @@ static void fmtTarget(char *out, uint8_t cap, uint16_t v) {
 static void stateBadge(char *out, uint8_t cap) {
   if (!linkAlive)          copyP(out, cap, PSTR("NOLINK"));
   else if (faulted)        copyP(out, cap, PSTR("FAULT"));
-  else if (confirmedRunning()) copyP(out, cap, PSTR("RUN"));
+  else if (confirmedRunning()) copyP(out, cap, (mode == MODE_DUTY && dipAuto) ? PSTR("RUN+D") : PSTR("RUN"));
   else if (sr.valid && (sr.flags & 0x01)) copyP(out, cap, PSTR("READY"));
   else                     copyP(out, cap, PSTR("IDLE"));
 }
@@ -808,6 +825,11 @@ void loop() {
       if (tgtRetry < TGT_SET_RETRY) { tgtRetry++; tgtDirty = true; tgtDirtyAt = now; }
       else                            setMsgP(M_SETFAIL);
     }
+    /* 歸零那一包掉了：補送；補不上就放棄歸零，直接送回原值 */
+    if (pendCmd == CMD_SET_CONTROL && seq == SQ_DIP) {
+      if (dipRetry < TGT_SET_RETRY) { dipRetry++; dipPhase = 1; }
+      else { dipPhase = 0; tgtDirty = true; tgtDirtyAt = now; setMsgP(M_SETFAIL); }
+    }
     pendCmd = 0;
     seq     = SQ_NONE;
   }
@@ -841,7 +863,18 @@ void loop() {
     if (evRepeat[B_DOWN]) bumpTarget(-1, accel(B_DOWN));
   }
 
-  if (evLong[B_START]) cycleMode();
+  bool dipMode = (mode == MODE_DUTY) && confirmedRunning() && !faulted;
+  if (dipMode && evLong[B_START]) {
+    dipIdx = (uint8_t)((dipIdx + 1) % DIP_N);
+    uint16_t ms = pgm_read_word(&DIP_MS[dipIdx]);
+    setMsgF(PSTR("DIP LEN %u.%us"), ms / 1000, (ms % 1000) / 100);
+  } else if (dipMode && evClick[B_START]) {
+    dipAuto = !dipAuto;
+    uint16_t ms = pgm_read_word(&DIP_MS[dipIdx]);
+    if (dipAuto) setMsgF(PSTR("AUTO DIP ON %u.%us"), ms / 1000, (ms % 1000) / 100);
+    else         setMsgF(PSTR("AUTO DIP OFF"));
+  }
+  else if (evLong[B_START]) cycleMode();
   else if (evClick[B_START]) {
     /* FAULT 時第一次按是清錯誤（反正多半 arm 不起來）；
        但如果清完還是 FAULT，再按一次就直接送 arm 序列 ——
@@ -858,13 +891,33 @@ void loop() {
      DUTY 模式按鍵還按著就先不送：調整途中的值只顯示在 OLED，放開才送最後那個值。
      否則從 60 調到 30 的途中 50、40 都會真的送出去，量磁滯時會被這些中間值污染。 */
   bool dutyHeld = (mode == MODE_DUTY) && (bs[B_UP].down || bs[B_DOWN].down);
-  if (tgtDirty) {
+
+  /* ---- 短暫歸零 ---- 歸零期間擋住一般推送，時間到才把 target 送回去 */
+  if (dipPhase && !confirmedRunning()) dipPhase = 0;      // 停了就不用回復
+  if (dipPhase == 1 && seq == SQ_NONE && !pendCmd) {
+    sendSetControl(0);                                    // lastSent 跟著變 0，送回時就不會再觸發歸零
+    seq = SQ_DIP; dipPhase = 2; dipT0 = now;              // ACK 回來時 dipT0 會再校正
+  } else if (dipPhase == 2 && seq == SQ_NONE && !pendCmd &&
+             (int32_t)(now - dipT0) >= (int32_t)pgm_read_word(&DIP_MS[dipIdx])) {
+    /* 有號比較：dipT0 是在 ACK 處理時取的 millis()，可能比這一圈的 now 還晚 */
+    dipPhase = 0;
+    tgtDirty = true; tgtDirtyAt = now - TGT_PUSH_MS; tgtRetry = 0;
+    setMsgF(PSTR("DIP END, TO %u.%u%%"), target / 10, target % 10);
+  }
+
+  if (tgtDirty && !dipPhase) {
     if (!confirmedRunning()) {
       tgtDirty = false;             // 沒在跑就只改本地設定值，按 START 時才一起送出
     } else if (!dutyHeld && seq == SQ_NONE && !pendCmd && (now - tgtDirtyAt) >= TGT_PUSH_MS) {
       tgtDirty = false;
-      sendSetControl(target);
-      seq = SQ_SET;
+      if (mode == MODE_DUTY && dipAuto && target < lastSent) {
+        dipPhase = 1; dipRetry = 0;                       // 往下調：先歸零，時間到再送 target
+        uint16_t ms = pgm_read_word(&DIP_MS[dipIdx]);
+        setMsgF(PSTR("DIP 0 FOR %u.%us"), ms / 1000, (ms % 1000) / 100);
+      } else {
+        sendSetControl(target);
+        seq = SQ_SET;
+      }
     }
   }
 
