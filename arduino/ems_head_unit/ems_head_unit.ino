@@ -46,7 +46,7 @@
 #include <stdarg.h>
 
 /* ==================== 設定 ==================== */
-#define FW_VERSION         "0.4"  // 顯示在待機畫面上，回報問題時用來對版本
+#define FW_VERSION         "0.5"  // 顯示在待機畫面上，回報問題時用來對版本
 #define EMS_BAUD          19200   // 通訊協定 §2
 #define TELEM_BAUD       115200   // D0/D1 遙測輸出速率
 #define OLED_ADDR          0x3C
@@ -114,8 +114,17 @@ enum : uint8_t { MODE_KP = 0, MODE_ERG = 1, MODE_DUTY = 2 };
 */
 static const uint16_t TGT_MAX[3]  = { 140, 3000, 1000 };
 /* DUTY 用 1（＝0.1%）是為了掃低 duty 段 —— 驅動在 duty 2~3 之間電流一步跳 18 mA，
-   1% 的解析度根本切不進去。長按時的跳幅由 accel() 補回來，手感與先前相同。 */
+   1% 的解析度根本切不進去。點一下走 0.1%，按住改走 DUTY_PRESET（見 dutyPreset()）。 */
 static const uint16_t TGT_STEP[3] = {   1,    5,    1 };
+
+/* DUTY 按住時依序停靠的檔位（0.1% 為單位）。
+   功率機量測都是整數點，舊的「連發 15 次後每次跳 8%」很容易衝過頭；
+   停靠檔位的話，從 60 降到 30 就是 60→50→40→30，不會越過目標。 */
+static const uint16_t DUTY_PRESET[] PROGMEM = {
+  0, 50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 750, 800, 900, 1000
+};
+#define DUTY_PRESET_N     (sizeof(DUTY_PRESET) / sizeof(DUTY_PRESET[0]))
+#define DUTY_PRESET_EVERY 4    // 連發每 4 次（約 0.44 秒）走一檔
 
 static const char MODE_N0[] PROGMEM = "KP";
 static const char MODE_N1[] PROGMEM = "ERG";
@@ -597,11 +606,33 @@ static void bumpTarget(int8_t dir, uint8_t mult) {
   tgtRetry   = 0;
 }
 
-/* DUTY 的 TGT_STEP 是其他模式的 1/10，長按倍率就放大 10 倍回去，
-   讓「按住」的跳幅維持在 8.0%/次，只有「點一下」變細成 0.1%。 */
+/* KP / ERG 按住超過 15 次後一次跳 8 格。DUTY 不走這裡，改走 dutyPreset()。 */
 static inline uint8_t accel(uint8_t i) {
-  if (bs[i].repCount <= 15) return 1;
-  return (mode == MODE_DUTY) ? 80 : 8;
+  return (bs[i].repCount <= 15) ? 1 : 8;
+}
+
+/* DUTY 按住：每 DUTY_PRESET_EVERY 次連發跳到下一個檔位。
+   「下一個」是嚴格大於（或小於）目前值的那一檔，所以從 29.9 往上會停 30.0，
+   從 30.1 往下也停 30.0。 */
+static void dutyPreset(uint8_t i, int8_t dir) {
+  if ((bs[i].repCount - 1) % DUTY_PRESET_EVERY) return;
+  uint16_t next = target;
+  if (dir > 0) {
+    for (uint8_t k = 0; k < DUTY_PRESET_N; k++) {
+      uint16_t p = pgm_read_word(&DUTY_PRESET[k]);
+      if (p > target) { next = p; break; }
+    }
+  } else {
+    for (int8_t k = DUTY_PRESET_N - 1; k >= 0; k--) {
+      uint16_t p = pgm_read_word(&DUTY_PRESET[k]);
+      if (p < target) { next = p; break; }
+    }
+  }
+  if (next == target) return;
+  target     = next;
+  tgtDirty   = true;
+  tgtDirtyAt = millis();
+  tgtRetry   = 0;
 }
 
 static void cycleMode() {
@@ -801,9 +832,14 @@ void loop() {
 
   /* ---- 按鍵 ---- */
   if (evEdge[B_UP])     bumpTarget(+1, 1);
-  if (evRepeat[B_UP])   bumpTarget(+1, accel(B_UP));
   if (evEdge[B_DOWN])   bumpTarget(-1, 1);
-  if (evRepeat[B_DOWN]) bumpTarget(-1, accel(B_DOWN));
+  if (mode == MODE_DUTY) {
+    if (evRepeat[B_UP])   dutyPreset(B_UP, +1);
+    if (evRepeat[B_DOWN]) dutyPreset(B_DOWN, -1);
+  } else {
+    if (evRepeat[B_UP])   bumpTarget(+1, accel(B_UP));
+    if (evRepeat[B_DOWN]) bumpTarget(-1, accel(B_DOWN));
+  }
 
   if (evLong[B_START]) cycleMode();
   else if (evClick[B_START]) {
@@ -818,11 +854,14 @@ void loop() {
   if (evLong[B_STOP])       seqSafeZero();
   else if (evClick[B_STOP]) seqStop();
 
-  /* ---- 目標值推送（節流） ---- */
+  /* ---- 目標值推送（節流） ----
+     DUTY 模式按鍵還按著就先不送：調整途中的值只顯示在 OLED，放開才送最後那個值。
+     否則從 60 調到 30 的途中 50、40 都會真的送出去，量磁滯時會被這些中間值污染。 */
+  bool dutyHeld = (mode == MODE_DUTY) && (bs[B_UP].down || bs[B_DOWN].down);
   if (tgtDirty) {
     if (!confirmedRunning()) {
       tgtDirty = false;             // 沒在跑就只改本地設定值，按 START 時才一起送出
-    } else if (seq == SQ_NONE && !pendCmd && (now - tgtDirtyAt) >= TGT_PUSH_MS) {
+    } else if (!dutyHeld && seq == SQ_NONE && !pendCmd && (now - tgtDirtyAt) >= TGT_PUSH_MS) {
       tgtDirty = false;
       sendSetControl(target);
       seq = SQ_SET;
