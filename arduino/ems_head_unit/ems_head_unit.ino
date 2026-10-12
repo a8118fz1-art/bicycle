@@ -46,7 +46,7 @@
 #include <stdarg.h>
 
 /* ==================== 設定 ==================== */
-#define FW_VERSION         "0.6"  // 顯示在待機畫面上，回報問題時用來對版本
+#define FW_VERSION         "0.7"  // 顯示在待機畫面上，回報問題時用來對版本
 #define EMS_BAUD          19200   // 通訊協定 §2
 #define TELEM_BAUD       115200   // D0/D1 遙測輸出速率
 #define OLED_ADDR          0x3C
@@ -262,7 +262,82 @@ static uint8_t  dipIdx   = 1;     // 預設 1 秒
 static uint8_t  dipPhase = 0;     // 0 = 沒在歸零，1 = 待送 0，2 = 歸零中
 static uint8_t  dipRetry = 0;
 static uint32_t dipT0    = 0;
+static uint16_t dipLenMs = 1000;  // 這一次歸零的長度；手動模式取 DIP_MS[dipIdx]，序列模式由步驟指定
 static uint16_t lastSent = 0;     // 最後一次送給下控的 SET_CONTROL 目標值
+
+/* ==================== 自動測試序列（FW 0.7） ====================
+   磁滯量測要切幾十個 duty、每段停固定秒數，手動按容易按錯（10/08 H 輪衝到 63.6、掉到 0.9）。
+   序列跑在 DUTY 協定模式上；畫面上是第 4 個模式「SEQ」，長按 START 切過去。
+   每一步：{ duty×10, 停留秒數, 切換前先歸零的毫秒數（0 = 直接切） }。
+   功率機轉速由人工設定，序列本身與踏頻無關。 */
+struct SeqStep { uint16_t duty, holdS, dipMs; };
+
+/* 每個序列都要在 600 秒內跑完：功率機一次記錄最長 600 秒，而且中途不能存檔。
+   所以「讓殘留消失的 5 分鐘」拆成獨立的 REST5，那段不用錄 —— 流程是
+   功率機按記錄 → 點 * → SEQ DONE → 功率機存檔 →（需要乾淨狀態時）跑 REST5 → 下一個。
+   每個量測序列都以 0/40 開頭（量 tare）、0/30 結尾。 */
+static const SeqStep SQS_REST[] PROGMEM = { {0,300,0} };              // 不用錄
+static const SeqStep SQS_HOLD[] PROGMEM = {      // 從 60 直接降到 30 後停 5 分鐘：偏差會不會自己回落（480 秒）
+  {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,300,0},{0,30,0} };
+static const SeqStep SQS_PTHA[] PROGMEM = {      // 60→30 直接降（220 秒）
+  {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,40,0},{0,30,0} };
+static const SeqStep SQS_PTHB[] PROGMEM = {      // 60→50→40→30 分段降，跟 PATH-A 比（230 秒）
+  {0,40,0},{600,40,0},{500,40,0},{400,40,0},{300,40,0},{0,30,0} };
+static const SeqStep SQS_REVA[] PROGMEM = {      // 60→30→45（190 秒）
+  {0,40,0},{600,40,0},{300,40,0},{450,40,0},{0,30,0} };
+static const SeqStep SQS_REVB[] PROGMEM = {      // 從 0 直接上 45，跟 REV-A 比（110 秒）
+  {0,40,0},{450,40,0},{0,30,0} };
+static const SeqStep SQS_UP[]   PROGMEM = {      // 上升曲線低段（350 秒）
+  {0,40,0},{100,40,0},{200,40,0},{300,40,0},{400,40,0},{500,40,0},{600,40,0},{700,40,0},{0,30,0} };
+static const SeqStep SQS_UPHI[] PROGMEM = {      // 上升曲線高段，分開跑以免功率機熱累積跳保護（160 秒）
+  {0,40,0},{800,30,0},{900,30,0},{1000,30,0},{0,30,0} };
+static const SeqStep SQS_D100[] PROGMEM = {      // 下降曲線：從 100 往下（440 秒）
+  {0,40,0},{1000,30,0},{900,30,0},{800,30,0},{700,40,0},{600,40,0},{500,40,0},{400,40,0},
+  {300,40,0},{200,40,0},{100,40,0},{0,30,0} };
+static const SeqStep SQS_D80[]  PROGMEM = {      // 380 秒
+  {0,40,0},{800,30,0},{700,40,0},{600,40,0},{500,40,0},{400,40,0},{300,40,0},{200,40,0},{100,40,0},{0,30,0} };
+static const SeqStep SQS_D60[]  PROGMEM = {      // 310 秒
+  {0,40,0},{600,40,0},{500,40,0},{400,40,0},{300,40,0},{200,40,0},{100,40,0},{0,30,0} };
+static const SeqStep SQS_D40[]  PROGMEM = {      // 230 秒
+  {0,40,0},{400,40,0},{300,40,0},{200,40,0},{100,40,0},{0,30,0} };
+/* 降阻力前歸零 N 毫秒：每個都自帶「從 0 升上來的 30」當同一檔的基準（各 220 秒） */
+static const SeqStep SQS_DP05[] PROGMEM = { {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,40,500},{0,30,0} };
+static const SeqStep SQS_DP1[]  PROGMEM = { {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,40,1000},{0,30,0} };
+static const SeqStep SQS_DP2[]  PROGMEM = { {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,40,2000},{0,30,0} };
+static const SeqStep SQS_DP5[]  PROGMEM = { {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,40,5000},{0,30,0} };
+
+struct SeqDef { const char *name; const SeqStep *steps; uint8_t n; };
+static const char SN1[]  PROGMEM = "REST5";  static const char SN2[]  PROGMEM = "HOLD5";
+static const char SN3[]  PROGMEM = "PATH-A"; static const char SN4[]  PROGMEM = "PATH-B";
+static const char SN5[]  PROGMEM = "REV-A";  static const char SN6[]  PROGMEM = "REV-B";
+static const char SN7[]  PROGMEM = "UP0-70"; static const char SN8[]  PROGMEM = "UP80+";
+static const char SN9[]  PROGMEM = "DN100";  static const char SN10[] PROGMEM = "DN80";
+static const char SN11[] PROGMEM = "DN60";   static const char SN12[] PROGMEM = "DN40";
+static const char SN13[] PROGMEM = "DIP.5";  static const char SN14[] PROGMEM = "DIP1";
+static const char SN15[] PROGMEM = "DIP2";   static const char SN16[] PROGMEM = "DIP5";
+#define SQN(a) (uint8_t)(sizeof(a) / sizeof(a[0]))
+#define SQ(n, a) { n, a, SQN(a) }
+static const SeqDef SEQS[] PROGMEM = {
+  SQ(SN1, SQS_REST), SQ(SN2, SQS_HOLD), SQ(SN3, SQS_PTHA), SQ(SN4, SQS_PTHB),
+  SQ(SN5, SQS_REVA), SQ(SN6, SQS_REVB), SQ(SN7, SQS_UP),   SQ(SN8, SQS_UPHI),
+  SQ(SN9, SQS_D100), SQ(SN10, SQS_D80), SQ(SN11, SQS_D60), SQ(SN12, SQS_D40),
+  SQ(SN13, SQS_DP05), SQ(SN14, SQS_DP1), SQ(SN15, SQS_DP2), SQ(SN16, SQS_DP5) };
+#define SEQ_N SQN(SEQS)
+
+static bool     uiSeq      = false;   // 畫面在 SEQ 模式（協定上仍是 MODE_DUTY）
+static uint8_t  seqSel     = 0;       // 選中的序列（0 起算）
+static bool     seqActive  = false;
+static bool     seqStarted = false;   // 下控確認 RUNNING 之後才開始計時
+static uint8_t  seqIdx     = 0;
+static uint32_t seqStepT0  = 0;
+static uint32_t seqNotRun  = 0;       // 開始後下控不在 RUNNING 的起點，超過 3 秒就中止
+
+/* 參數用 void*：Arduino 會把函式原型自動插到檔案最前面，那時 SeqStep 還沒宣告 */
+static void seqStepRead(uint8_t i, void *s) {
+  const SeqStep *p = (const SeqStep *)pgm_read_ptr(&SEQS[seqSel].steps);
+  memcpy_P(s, &p[i], sizeof(SeqStep));
+}
+static uint8_t seqLen() { return pgm_read_byte(&SEQS[seqSel].n); }
 
 static bool     tgtDirty = false;
 static uint32_t tgtDirtyAt = 0;
@@ -654,9 +729,73 @@ static void dutyPreset(uint8_t i, int8_t dir) {
 
 static void cycleMode() {
   if (confirmedRunning()) { setMsgP(M_RUNMODE); return; }   // 跑的時候不給換模式
-  mode = (uint8_t)((mode + 1) % 3);
+  /* KP → ERG → DUTY → SEQ → KP。SEQ 只是畫面模式，協定上沿用 MODE_DUTY */
+  if (mode == MODE_DUTY && !uiSeq) uiSeq = true;
+  else {
+    uiSeq = false;
+    mode = (uint8_t)((mode + 1) % 3);
+  }
   if (target > TGT_MAX[mode]) target = TGT_MAX[mode];
   msg[0] = 0;
+}
+
+/* ---- 序列：切到第 i 步 ---- */
+static void seqApply(uint8_t i, uint32_t now) {
+  SeqStep s; seqStepRead(i, &s);
+  seqIdx = i; seqStepT0 = now;
+  target = s.duty; tgtRetry = 0;
+  if (s.dipMs && s.duty < lastSent) {                    // 先歸零，時間到由歸零邏輯送出 target
+    dipLenMs = s.dipMs; dipPhase = 1; dipRetry = 0; tgtDirty = false;
+  } else {
+    tgtDirty = true; tgtDirtyAt = now - TGT_PUSH_MS;
+  }
+  setMsgF(PSTR("SQ%u %u/%u %u.%u%%"), (unsigned)(seqSel + 1), (unsigned)(i + 1),
+          (unsigned)seqLen(), (unsigned)(s.duty / 10), (unsigned)(s.duty % 10));
+}
+
+static void seqAbort(PGM_P why) {
+  if (!seqActive) return;
+  seqActive = false;
+  setMsgP(why);
+}
+
+static const char M_SQDONE[]  PROGMEM = "SEQ DONE";
+static const char M_SQABORT[] PROGMEM = "SEQ ABORTED";
+static const char M_SQNORUN[] PROGMEM = "SEQ STOP: NOT RUN";
+
+static void seqStart() {
+  seqActive = true; seqStarted = false; seqNotRun = 0;
+  dipAuto = false; dipPhase = 0;                         // 手動的自動歸零會干擾序列，關掉
+  SeqStep s; seqStepRead(0, &s);
+  target = s.duty;
+  if (confirmedRunning()) { seqStarted = true; seqApply(0, millis()); }
+  else seqArm();                                          // 送 SET_CONTROL(第一步) → START
+}
+
+static void seqTick(uint32_t now) {
+  if (!seqActive) return;
+  if (!linkAlive) return;                                 // LINK LOST 一下就回來，不中止也不前進
+  if (!confirmedRunning()) {
+    if (!seqNotRun) seqNotRun = now;
+    if (now - seqNotRun > 3000 && seq == SQ_NONE) seqAbort(M_SQNORUN);
+    return;
+  }
+  seqNotRun = 0;
+  if (!seqStarted) { seqStarted = true; seqApply(0, now); return; }
+
+  /* 推送途中剛好碰到 LINK LOST 時，推送邏輯會把 tgtDirty 清掉、值就沒送出去。
+     序列跑的時候自己盯著：最後送出的值不是 target 就再推一次。 */
+  if (!dipPhase && !tgtDirty && lastSent != target && seq == SQ_NONE && !pendCmd) {
+    tgtDirty = true; tgtDirtyAt = now - TGT_PUSH_MS;
+  }
+
+  SeqStep s; seqStepRead(seqIdx, &s);
+  /* 有號比較：seqStepT0 可能是在這一圈 now 之後才取的 millis()（例如 seqStart 裡），
+     無號相減會變成超大值、立刻跳下一步 —— 10/12 D 輪 SQ3 第 1 步只停了 21 ms 就是這個 */
+  if ((int32_t)(now - seqStepT0) >= (int32_t)((uint32_t)s.holdS * 1000UL)) {
+    if (seqIdx + 1 >= seqLen()) { seqAbort(M_SQDONE); return; }  // 最後一步是 duty 0，停在那裡不 STOP
+    seqApply((uint8_t)(seqIdx + 1), now);
+  }
 }
 
 /* ==================== 畫面 ==================== */
@@ -708,6 +847,13 @@ static void render() {
 
   /* 本機設定值與下控實際採用的目標值不同時標 * —— 看得出設定有沒有真的送進去 */
   bool unsent = sr.valid && (sr.tgt != target);
+  if (uiSeq && !seqActive) {
+    char nm[8];
+    copyP(nm, sizeof(nm), (PGM_P)pgm_read_ptr(&SEQS[seqSel].name));
+    snprintf_P(L[0], sizeof(L[0]), PSTR("SEQ%u %-6s"), (unsigned)(seqSel + 1), nm);
+  } else if (uiSeq) {
+    snprintf_P(L[0], sizeof(L[0]), PSTR("S%u %-7s%c"), (unsigned)(seqSel + 1), t, unsent ? '*' : ' ');
+  } else
   snprintf_P(L[0], sizeof(L[0]), PSTR("%-4s %-7s%c"), mn, t, unsent ? '*' : ' ');
 
   if (sr.valid) {
@@ -728,6 +874,14 @@ static void render() {
     else if ((sr.err & 0x04) && sysValid)
       snprintf_P(L[3], sizeof(L[3]), PSTR("VIN %u.%02uV E%04X"),
                  (unsigned)(vinMv / 1000), (unsigned)((vinMv % 1000) / 10), (unsigned)sr.err);
+    /* 序列執行中：第 4 行改顯示進度與這一步剩幾秒 */
+    else if (seqActive && seqStarted) {
+      SeqStep s; seqStepRead(seqIdx, &s);
+      uint32_t el = (millis() - seqStepT0) / 1000UL;
+      uint16_t left = (el >= s.holdS) ? 0 : (uint16_t)(s.holdS - el);
+      snprintf_P(L[3], sizeof(L[3]), PSTR("STEP %u/%u  %us"),
+                 (unsigned)(seqIdx + 1), (unsigned)seqLen(), (unsigned)left);
+    }
     else
       snprintf_P(L[3], sizeof(L[3]), PSTR("TGT %-5u ERR %04X"),
                  (unsigned)sr.tgt, (unsigned)sr.err);
@@ -853,17 +1007,25 @@ void loop() {
   }
 
   /* ---- 按鍵 ---- */
-  if (evEdge[B_UP])     bumpTarget(+1, 1);
-  if (evEdge[B_DOWN])   bumpTarget(-1, 1);
-  if (mode == MODE_DUTY) {
-    if (evRepeat[B_UP])   dutyPreset(B_UP, +1);
-    if (evRepeat[B_DOWN]) dutyPreset(B_DOWN, -1);
+  if (uiSeq) {
+    /* SEQ 畫面：↑↓ 選序列；跑的時候不准動，避免誤觸改掉 duty */
+    if (!seqActive) {
+      if (evEdge[B_UP])   { seqSel = (uint8_t)((seqSel + 1) % SEQ_N); msg[0] = 0; }
+      if (evEdge[B_DOWN]) { seqSel = (uint8_t)((seqSel + SEQ_N - 1) % SEQ_N); msg[0] = 0; }
+    }
   } else {
-    if (evRepeat[B_UP])   bumpTarget(+1, accel(B_UP));
-    if (evRepeat[B_DOWN]) bumpTarget(-1, accel(B_DOWN));
+    if (evEdge[B_UP])     bumpTarget(+1, 1);
+    if (evEdge[B_DOWN])   bumpTarget(-1, 1);
+    if (mode == MODE_DUTY) {
+      if (evRepeat[B_UP])   dutyPreset(B_UP, +1);
+      if (evRepeat[B_DOWN]) dutyPreset(B_DOWN, -1);
+    } else {
+      if (evRepeat[B_UP])   bumpTarget(+1, accel(B_UP));
+      if (evRepeat[B_DOWN]) bumpTarget(-1, accel(B_DOWN));
+    }
   }
 
-  bool dipMode = (mode == MODE_DUTY) && confirmedRunning() && !faulted;
+  bool dipMode = !uiSeq && (mode == MODE_DUTY) && confirmedRunning() && !faulted;
   if (dipMode && evLong[B_START]) {
     dipIdx = (uint8_t)((dipIdx + 1) % DIP_N);
     uint16_t ms = pgm_read_word(&DIP_MS[dipIdx]);
@@ -873,6 +1035,9 @@ void loop() {
     uint16_t ms = pgm_read_word(&DIP_MS[dipIdx]);
     if (dipAuto) setMsgF(PSTR("AUTO DIP ON %u.%us"), ms / 1000, (ms % 1000) / 100);
     else         setMsgF(PSTR("AUTO DIP OFF"));
+  }
+  else if (uiSeq && evClick[B_START] && !faulted) {
+    if (!seqActive) seqStart();
   }
   else if (evLong[B_START]) cycleMode();
   else if (evClick[B_START]) {
@@ -884,8 +1049,10 @@ void loop() {
     else                        seqArm();
   }
 
-  if (evLong[B_STOP])       seqSafeZero();
-  else if (evClick[B_STOP]) seqStop();
+  if (evLong[B_STOP])       { seqAbort(M_SQABORT); seqSafeZero(); }
+  else if (evClick[B_STOP]) { seqAbort(M_SQABORT); seqStop(); }
+
+  seqTick(now);
 
   /* ---- 目標值推送（節流） ----
      DUTY 模式按鍵還按著就先不送：調整途中的值只顯示在 OLED，放開才送最後那個值。
@@ -898,7 +1065,7 @@ void loop() {
     sendSetControl(0);                                    // lastSent 跟著變 0，送回時就不會再觸發歸零
     seq = SQ_DIP; dipPhase = 2; dipT0 = now;              // ACK 回來時 dipT0 會再校正
   } else if (dipPhase == 2 && seq == SQ_NONE && !pendCmd &&
-             (int32_t)(now - dipT0) >= (int32_t)pgm_read_word(&DIP_MS[dipIdx])) {
+             (int32_t)(now - dipT0) >= (int32_t)dipLenMs) {
     /* 有號比較：dipT0 是在 ACK 處理時取的 millis()，可能比這一圈的 now 還晚 */
     dipPhase = 0;
     tgtDirty = true; tgtDirtyAt = now - TGT_PUSH_MS; tgtRetry = 0;
@@ -912,8 +1079,8 @@ void loop() {
       tgtDirty = false;
       if (mode == MODE_DUTY && dipAuto && target < lastSent) {
         dipPhase = 1; dipRetry = 0;                       // 往下調：先歸零，時間到再送 target
-        uint16_t ms = pgm_read_word(&DIP_MS[dipIdx]);
-        setMsgF(PSTR("DIP 0 FOR %u.%us"), ms / 1000, (ms % 1000) / 100);
+        dipLenMs = pgm_read_word(&DIP_MS[dipIdx]);
+        setMsgF(PSTR("DIP 0 FOR %u.%us"), dipLenMs / 1000, (dipLenMs % 1000) / 100);
       } else {
         sendSetControl(target);
         seq = SQ_SET;

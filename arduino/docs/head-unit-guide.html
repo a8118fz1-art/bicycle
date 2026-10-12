@@ -405,7 +405,7 @@ RPM 54-6843 n710
               <span style="color:var(--ink-soft);font-size:13px">FAULT 狀態下：第一次按送 <code>RESET_ERROR</code>；
               若錯誤清不掉，<b>再按一次會強制送出啟動序列</b></span><br>
               <span style="color:var(--ink-soft);font-size:13px"><b>DUTY 運轉中（FW 0.6 起）：開／關「降阻力前自動歸零」</b>——開啟後每次往下調，先送 duty 0、停設定的秒數、再送新值；狀態列顯示 <code>RUN+D</code>（磁滯測試用）</span></td>
-          <td>切換模式 KP → ERG → DUTY<br>
+          <td>切換模式 KP → ERG → DUTY → SEQ<br>
               <span style="color:var(--ink-soft);font-size:13px">運轉中不允許，會顯示 <code>STOP FIRST</code></span><br>
               <span style="color:var(--ink-soft);font-size:13px"><b>DUTY 運轉中（FW 0.6 起）：換歸零長度</b> 0.5 → 1 → 2 → 5 秒（預設 1 秒）</span></td>
         </tr>
@@ -427,6 +427,39 @@ RPM 54-6843 n710
         <tr><td class="k"><b>KP</b></td><td class="k">0.0 – 14.0</td><td class="k">0.1</td><td>數值 ×10（5.0 → <code>50</code>）</td></tr>
         <tr><td class="k"><b>ERG</b></td><td class="k">0 – 3000 W</td><td class="k">5 W</td><td>直接是瓦特（250 → <code>250</code>）</td></tr>
         <tr><td class="k"><b>DUTY</b></td><td class="k">0 – 100 %</td><td class="k">0.1 %</td><td>數值 ×10（50% → <code>500</code>，2.4% → <code>24</code>）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>SEQ 模式：自動測試序列（FW 0.7 起）</h3>
+  <p>長按 <span class="key">*</span> 依序切換 KP → ERG → DUTY → <b>SEQ</b>。SEQ 在協定上就是 DUTY 模式，只是 duty 由 Nano 照表自動切換、自動計時。功率機轉速仍由人工設定。</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="k">按鍵</th><th>動作</th></tr></thead>
+      <tbody>
+        <tr><td class="k"><span class="key">↑</span> <span class="key">↓</span></td><td>選序列（第一行顯示 <code>SEQ2 HOLD5</code>）。執行中無作用，避免誤觸</td></tr>
+        <tr><td class="k"><span class="key">*</span> 點一下</td><td>開始。沒開阻力的話會自動送啟動序列</td></tr>
+        <tr><td class="k"><span class="key">#</span></td><td>隨時中止（同時送 STOP）。長按 = 安全歸零</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>執行中第 4 行顯示 <code>STEP 3/6  27s</code>（第幾步、這一步還剩幾秒）；每切一步訊息列顯示 <code>SQ2 3/6 30.0%</code>，並寫進記錄頁 CSV。跑完顯示 <code>SEQ DONE</code>，停在 duty 0、阻力不關。下控掉出 RUNNING 超過 3 秒會自動中止（<code>SEQ STOP: NOT RUN</code>）；LINK LOST 一下就回來不影響。</p>
+  <p><b>功率機一次最長只錄 600 秒、中途不能存檔</b>，所以每個量測序列都在 480 秒內跑完，讓殘留消失的 5 分鐘拆成獨立的 <b>REST5</b>（不用錄）。流程：</p>
+  <p style="margin-left:1em">功率機按記錄 → 選序列、點 <span class="key">*</span> → <code>SEQ DONE</code> → 功率機存檔 →（下一個需要乾淨狀態時）跑 REST5 → 下一個</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="k">編號</th><th class="k">名稱</th><th>內容（duty% / 秒）</th><th class="k">秒</th><th class="k">錄</th></tr></thead>
+      <tbody>
+        <tr><td class="k">1</td><td class="k">REST5</td><td>duty 0 停 5 分鐘，讓殘留消失</td><td class="k">300</td><td class="k">不用</td></tr>
+        <tr><td class="k">2</td><td class="k">HOLD5</td><td>0/40 → 30/40 → 0/30 → 60/40 → <b>30/300</b> → 0/30。直接降後停 5 分鐘</td><td class="k">480</td><td class="k">✓</td></tr>
+        <tr><td class="k">3</td><td class="k">PATH-A</td><td>0 → 30 → 0 → 60 → <b>30（直接降）</b> → 0</td><td class="k">220</td><td class="k">✓</td></tr>
+        <tr><td class="k">4</td><td class="k">PATH-B</td><td>0 → 60 → 50 → 40 → <b>30（分段降）</b> → 0。前面先跑 REST5</td><td class="k">230</td><td class="k">✓</td></tr>
+        <tr><td class="k">5</td><td class="k">REV-A</td><td>0 → 60 → 30 → <b>45（降了再升）</b> → 0</td><td class="k">190</td><td class="k">✓</td></tr>
+        <tr><td class="k">6</td><td class="k">REV-B</td><td>0 → <b>45（從 0 上）</b> → 0。前面先跑 REST5</td><td class="k">110</td><td class="k">✓</td></tr>
+        <tr><td class="k">7</td><td class="k">UP0-70</td><td>0 → 10 → 20 … 70，各 40 秒 → 0。上升曲線低段</td><td class="k">350</td><td class="k">✓</td></tr>
+        <tr><td class="k">8</td><td class="k">UP80+</td><td>0 → 80 → 90 → 100，各 30 秒 → 0。上升曲線高段</td><td class="k">160</td><td class="k">✓</td></tr>
+        <tr><td class="k">9–12</td><td class="k">DN100 / DN80 / DN60 / DN40</td><td>0 → 高點 → 每次降 10 … 10 → 0。下降曲線，每條前面先跑 REST5</td><td class="k">230–440</td><td class="k">✓</td></tr>
+        <tr><td class="k">13–16</td><td class="k">DIP.5 / DIP1 / DIP2 / DIP5</td><td>0 → 30 → 0 → 60 → <b>歸零 0.5／1／2／5 秒再到 30</b> → 0。每個前面先跑 REST5</td><td class="k">220</td><td class="k">✓</td></tr>
       </tbody>
     </table>
   </div>
