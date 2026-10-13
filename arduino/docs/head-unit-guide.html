@@ -1,0 +1,628 @@
+<title>EMS Bike 手把測試單元</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=JetBrains+Mono:wght@400;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+
+<style>
+/* 沿用 uart_test.html 工廠測試台的配色，兩份文件放在一起看不會打架 */
+:root{
+  --paper:#eaeef1;
+  --panel:#ffffff;
+  --panel-2:#f4f7f9;
+  --rule:#c3ced7;
+  --rule-soft:#dde4ea;
+  --ink:#16212c;
+  --ink-soft:#5b6b7a;
+  --signal:#0d6e78;
+  --signal-bg:#e2f0f1;
+  --live:#b45f06;
+  --live-bg:#fbeedd;
+  --fault:#a3231c;
+  --fault-bg:#f9e5e3;
+  --shadow:0 1px 2px rgba(22,33,44,.06),0 8px 24px -16px rgba(22,33,44,.35);
+
+  --sans:"Archivo","Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#11171d;
+    --panel:#171f27;
+    --panel-2:#1d262f;
+    --rule:#2f3d49;
+    --rule-soft:#26313b;
+    --ink:#e4ebf1;
+    --ink-soft:#93a3b1;
+    --signal:#49b3bd;
+    --signal-bg:#11333a;
+    --live:#e8933a;
+    --live-bg:#38260f;
+    --fault:#e2685f;
+    --fault-bg:#3a1a18;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -16px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#11171d;
+  --panel:#171f27;
+  --panel-2:#1d262f;
+  --rule:#2f3d49;
+  --rule-soft:#26313b;
+  --ink:#e4ebf1;
+  --ink-soft:#93a3b1;
+  --signal:#49b3bd;
+  --signal-bg:#11333a;
+  --live:#e8933a;
+  --live-bg:#38260f;
+  --fault:#e2685f;
+  --fault-bg:#3a1a18;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -16px rgba(0,0,0,.8);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:15px;
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:940px;margin:0 auto;padding:28px 20px 72px;display:flex;flex-direction:column;gap:26px}
+
+/* ---------- 抬頭 ---------- */
+header{
+  display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;justify-content:space-between;
+  padding-bottom:16px;border-bottom:2px solid var(--ink);
+}
+.title h1{
+  font-size:clamp(23px,4vw,31px);margin:0;font-weight:700;letter-spacing:-.015em;text-wrap:balance;
+}
+.title p{margin:6px 0 0;color:var(--ink-soft);font-size:14px;max-width:56ch}
+.stamp{
+  font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--signal);border:1px solid var(--signal);border-radius:2px;padding:5px 9px;white-space:nowrap;
+}
+
+/* ---------- 區塊 ---------- */
+section{display:flex;flex-direction:column;gap:12px}
+h2{
+  font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);
+  margin:0;font-weight:700;display:flex;align-items:center;gap:10px;
+}
+h2::before{
+  content:attr(data-n);font-family:var(--mono);font-size:11px;color:var(--panel);
+  background:var(--ink);border-radius:2px;padding:2px 6px;letter-spacing:0;
+}
+h3{font-size:14px;margin:6px 0 0;font-weight:600;letter-spacing:-.01em}
+p{margin:0}
+.lede{color:var(--ink-soft);font-size:14px;max-width:70ch}
+
+.card{
+  background:var(--panel);border:1px solid var(--rule);border-radius:4px;
+  padding:16px;box-shadow:var(--shadow);
+}
+
+/* ---------- 表格 ---------- */
+.tw{overflow-x:auto;background:var(--panel);border:1px solid var(--rule);border-radius:4px;box-shadow:var(--shadow)}
+table{border-collapse:collapse;width:100%;font-size:14px;min-width:520px}
+th,td{text-align:left;padding:9px 13px;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+thead th{
+  font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-soft);
+  font-weight:700;background:var(--panel-2);border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+tbody tr:last-child td{border-bottom:none}
+td.k,th.k{white-space:nowrap}
+code,.m{font-family:var(--mono);font-size:.92em;font-variant-numeric:tabular-nums}
+code{background:var(--panel-2);border:1px solid var(--rule-soft);border-radius:3px;padding:1px 5px}
+td code{white-space:nowrap}
+
+/* ---------- 標記 ---------- */
+.tag{
+  display:inline-block;font-family:var(--mono);font-size:11px;font-weight:600;
+  letter-spacing:.04em;padding:2px 7px;border-radius:2px;border:1px solid;white-space:nowrap;
+}
+.t-ok{color:var(--signal);border-color:var(--signal);background:var(--signal-bg)}
+.t-live{color:var(--live);border-color:var(--live);background:var(--live-bg)}
+.t-bad{color:var(--fault);border-color:var(--fault);background:var(--fault-bg)}
+.t-mute{color:var(--ink-soft);border-color:var(--rule);background:var(--panel-2)}
+
+/* ---------- 實體按鍵 ---------- */
+.key{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:27px;height:27px;border:1.5px solid var(--ink);border-radius:4px;
+  font-family:var(--mono);font-size:15px;font-weight:700;line-height:1;
+  background:var(--panel-2);box-shadow:0 1.5px 0 var(--rule);
+  vertical-align:middle;
+}
+.key-inline{width:22px;height:22px;font-size:13px;margin:0 1px}
+
+/* ---------- 警示 ---------- */
+.warn{
+  background:var(--fault-bg);border:1px solid var(--fault);border-left-width:4px;border-radius:3px;
+  padding:12px 15px;display:flex;flex-direction:column;gap:6px;
+}
+.warn b{color:var(--fault)}
+.warn p{font-size:14px}
+.note{
+  border-left:3px solid var(--live);padding:2px 0 2px 12px;color:var(--ink-soft);font-size:13.5px;
+}
+.note b{color:var(--ink)}
+
+/* ---------- OLED 模擬 ---------- */
+.screen-row{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start}
+.oled{
+  background:#05080c;border:3px solid #333d47;border-radius:6px;padding:13px 15px;
+  font-family:var(--mono);font-size:13px;line-height:1.62;color:#b8f0ff;
+  white-space:pre;overflow-x:auto;flex:1 1 330px;min-width:0;
+  box-shadow:inset 0 0 26px rgba(80,190,220,.14),var(--shadow);
+  font-variant-numeric:tabular-nums;text-shadow:0 0 5px rgba(120,220,255,.4);
+}
+.oled .dim{color:#5d7f8d;text-shadow:none}
+.oled .hi{color:#ffffff}
+.oled .amber{color:#ffb765;text-shadow:0 0 5px rgba(255,160,60,.4)}
+.oled .red{color:#ff8a7a;text-shadow:0 0 5px rgba(255,110,90,.4)}
+.legend{flex:1 1 300px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.legend div{display:flex;gap:10px;font-size:13.5px;line-height:1.45}
+.legend .pos{
+  font-family:var(--mono);font-size:11px;color:var(--signal);border:1px solid var(--rule);
+  background:var(--panel-2);border-radius:2px;padding:1px 6px;height:fit-content;white-space:nowrap;flex:0 0 auto;
+}
+
+/* ---------- 流程 ---------- */
+ol.steps{margin:0;padding:0;list-style:none;counter-reset:s;display:flex;flex-direction:column;gap:0}
+ol.steps li{
+  counter-increment:s;position:relative;padding:11px 0 11px 40px;border-bottom:1px solid var(--rule-soft);
+}
+ol.steps li:last-child{border-bottom:none}
+ol.steps li::before{
+  content:counter(s);position:absolute;left:0;top:11px;
+  font-family:var(--mono);font-size:11px;font-weight:700;color:var(--panel);background:var(--signal);
+  width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+}
+ol.steps b{font-weight:600}
+ol.steps .sub{display:block;color:var(--ink-soft);font-size:13.5px;margin-top:3px}
+
+footer{
+  border-top:1px solid var(--rule);padding-top:16px;color:var(--ink-soft);font-size:12.5px;
+  display:flex;flex-wrap:wrap;gap:8px 20px;justify-content:space-between;
+}
+a{color:var(--signal)}
+@media (max-width:560px){
+  .wrap{padding:20px 14px 56px}
+  th,td{padding:8px 10px}
+}
+
+/* ---------- 列印 ---------- */
+@page{size:A4;margin:14mm 12mm}
+@media print{
+  /* 強制淺色。深色主題印出來整頁都是碳粉，而且螢幕模擬區塊會失去對比 */
+  :root,
+  :root:not([data-theme="light"]),
+  :root[data-theme="dark"]{
+    --paper:#ffffff; --panel:#ffffff; --panel-2:#f5f7f9;
+    --rule:#aab6c0; --rule-soft:#d5dde3;
+    --ink:#16212c; --ink-soft:#4d5d6b;
+    --signal:#0a5b64; --signal-bg:#e6f2f3;
+    --live:#8f4c04;  --live-bg:#fbeedd;
+    --fault:#8c1e18; --fault-bg:#f9e5e3;
+    --shadow:none;
+  }
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{font-size:10.5pt;background:#fff}
+  .wrap{max-width:none;padding:0;gap:16px}
+  table{min-width:0;font-size:9.5pt;break-inside:auto}
+  thead{display:table-header-group}      /* 跨頁時表頭重複 */
+  tr{break-inside:avoid}
+  th,td{padding:5px 8px}
+  .card,.warn,.note,.screen-row{break-inside:avoid}
+  h2,h3{break-after:avoid}
+  header{break-after:avoid}
+  footer{break-before:avoid}
+  /* 螢幕發光效果印在紙上只會糊成一團，而且會讓文字在 PDF 裡被抽出兩次 */
+  .oled{font-size:10pt;box-shadow:none}
+  .oled,.oled .dim,.oled .hi,.oled .amber,.oled .red{text-shadow:none}
+  ol.steps li{break-inside:avoid}
+}
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="title">
+    <h1>EMS Bike 手把測試單元</h1>
+    <p>取代上控 HMI 的獨立測試裝置。不需要電腦或瀏覽器，直接對下控跑完整的
+       <span class="m">SET_CONTROL → START</span> 序列，並顯示 ACK 結果、錯誤旗標與鏈路狀態。</p>
+  </div>
+  <span class="stamp">UART 19200 8-N-1</span>
+</header>
+
+<!-- ============ 1 接線 ============ -->
+<section>
+  <h2 data-n="1">接線與供電</h2>
+
+  <div class="warn">
+    <b>接線前務必確認兩件事</b>
+    <p><b>一、不要接下控的 HMI 電源腳。</b>本機由 Type-C 供電，兩組電源並聯會互相灌電。
+       <b>只接 TX / RX / GND 三條線。</b></p>
+    <p><b>二、量下控 TX 閒置電壓。</b>若為 3.3V，D9 這條線需分壓後再接下控 RX
+       （串 1kΩ、對地 2kΩ），直接接 5V 可能損壞下控輸入。下控 TX 為 3.3V 進本機 D8 則安全，不需處理。</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th class="k">本機腳位</th><th class="k">方向</th><th>接到下控</th><th>備註</th></tr></thead>
+      <tbody>
+        <tr><td class="k"><code>D8</code></td><td class="k">←</td><td><b>TX</b></td><td>接收 STATUS_REPORT 等封包</td></tr>
+        <tr><td class="k"><code>D9</code></td><td class="k">→</td><td><b>RX</b></td><td>送出指令與心跳，準位需先確認</td></tr>
+        <tr><td class="k"><code>GND</code></td><td class="k">↔</td><td><b>GND</b></td><td>必接。接之前先量兩端 GND 電位差應接近 0V</td></tr>
+        <tr><td class="k"><code>Type-C</code></td><td class="k">—</td><td class="m">（不接下控）</td><td>本機電源，接充電器或電腦皆可</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="note"><b>接上後沒有反應？</b>若畫面一直是 <span class="m">NOLINK</span>，先把 D8 和 D9 對調再試 —— 兩條線是交叉接的，接反最常見。</p>
+</section>
+
+<!-- ============ 2 畫面 ============ -->
+<section>
+  <h2 data-n="2">畫面判讀</h2>
+  <p class="lede">128×64 OLED，五行。前四行是下控回報的即時值，最後一行是最近一次事件。</p>
+
+  <div class="screen-row">
+    <div class="oled">KP   5.0             <span class="amber">RUN</span>
+RPM   82 PWR  245W
+DTY 31.2% 1850mA
+TGT 50    ERR 0000
+<span class="dim">&gt;</span> <span class="hi">RESISTANCE ON</span></div>
+
+    <div class="legend">
+      <div><span class="pos">1 左</span><span><b>模式與你設定的目標值。</b>KP / ERG / DUTY 三種，用按鍵調整。</span></div>
+      <div><span class="pos">1 右</span><span><b>狀態徽章。</b>見下一節。</span></div>
+      <div><span class="pos">2</span><span><b>轉速</b>與<b>下控估算的功率</b>。</span></div>
+      <div><span class="pos">3</span><span><b>PWM duty</b> 與<b>估算電流</b>。</span></div>
+      <div><span class="pos">4</span><span><b>下控實際採用的目標值</b>與 <b>ERROR 旗標</b>（十六進位）。</span></div>
+      <div><span class="pos">5</span><span><b>最近一次事件。</b>診斷時最重要的一行。</span></div>
+    </div>
+  </div>
+
+  <h3>三個會自動切換的變體</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="k">條件</th><th class="k">變化的行</th><th>顯示內容與用意</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="k">ERR 含 <code>0x02</code><br><span class="m" style="font-size:12px;color:var(--ink-soft)">RPM_FAIL</span></td>
+          <td class="k">第 3、4 行</td>
+          <td><code>RPM 54-6843 n710</code> <b>加上一張波形圖</b><br>
+              第 3 行是轉速的<b>最小值 - 最大值</b>與累積樣本數；第 4 行讓位給最近 12 秒的<b>波形</b>。
+              故障時 DTY/電流必為 0 沒有資訊量，換成可量化的轉速飄動狀況。
+              按開始鍵 <span class="key key-inline">*</span> 清除錯誤時統計與波形一起歸零。</td>
+        </tr>
+        <tr>
+          <td class="k">ERR 含 <code>0x04</code><br><span class="m" style="font-size:12px;color:var(--ink-soft)">POWER_FAIL</span></td>
+          <td class="k">第 4 行</td>
+          <td><code>VIN 24.03V E0004</code><br>下控回報的<b>實際供電電壓</b>。判斷電源故障的第一手資料。</td>
+        </tr>
+        <tr>
+          <td class="k">尚未收到任何<br>STATUS_REPORT</td>
+          <td class="k">第 2–4 行</td>
+          <td><code>waiting for STATUS</code> / <code>CRC ERR 0</code> / <code>FREE RAM 540</code><br>此時可確認本機是否正常運作。<b>FREE RAM 低於 150 請回報</b>。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>轉速故障時的波形判讀</h3>
+  <p class="lede"><b>最小／最大值有個盲點：它分不出「大部分正常、偶爾尖峰」和「從頭到尾都是垃圾」。</b>
+     這兩種的成因與修法完全不同，所以故障時畫面會直接把波形畫出來 —— 現場不需要接電腦。</p>
+
+  <div class="screen-row">
+    <div class="oled">KP   5.0           <span class="red">FAULT</span>
+RPM 6843 PWR    0W
+RPM 54-6843 n710
+<span class="amber">▁█▁▁▃▁▁█▁▁▁▂▁▁█▁▁▁▅▁▁</span>
+<span class="dim">&gt;</span> <span class="hi">ERR REPORT 0x02</span></div>
+
+    <div class="legend">
+      <div><span class="pos">稀疏高柱</span><span><b>偶發尖峰。</b>訊號大致正常但被干擾打亂，方向是<b>濾波與線路隔離</b>。</span></div>
+      <div><span class="pos">整片填滿</span><span><b>訊號全程不可信。</b>通常是輸入浮空在抓環境雜訊，方向是<b>上拉電阻</b>，加電容沒有用。</span></div>
+      <div><span class="pos">縱軸</span><span>相對於目前的最大值自動縮放，看的是<b>形狀</b>不是絕對值。</span></div>
+      <div><span class="pos">橫軸</span><span>最近約 12 秒，<b>最新的在最右邊</b>。</span></div>
+    </div>
+  </div>
+
+  <p class="note"><b>最快的鑑別方式仍然是拔掉感測器。</b>拔掉後波形若還在跳動，代表下控的輸入端本身就在抓雜訊，
+     與感測器無關；若變成一條平線，問題就在感測器或它的線路上。</p>
+
+  <h3>畫面上的星號記號</h3>
+  <div class="note" style="border-color:var(--signal)">
+    <b>好記的巧合：按 <span class="key key-inline">*</span> 鍵之後，畫面上的 <span class="m">*</span> 記號就會消失。</b>
+    兩者本來是不同的東西 —— 畫面的 <span class="m">*</span> 是狀態顯示，按鍵 <span class="key key-inline">*</span> 是開始 ——
+    但按下開始就會把設定送進下控，記號自然跟著消失。
+  </div>
+  <p class="note">畫面上的 <b><span class="m">*</span></b> 代表<b>你設的值與下控回報的 TGT 不一致</b>，也就是設定還沒生效。
+     <b>它不是通訊錯誤。</b>按下開始鍵之後 <span class="m">*</span> 應該消失、TGT 應該變成你設的數字 ——
+     這是判斷指令有沒有真的送進去最快的方法。</p>
+</section>
+
+<!-- ============ 3 狀態徽章 ============ -->
+<section>
+  <h2 data-n="3">狀態徽章</h2>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="k">徽章</th><th class="k">來源</th><th>意義</th></tr></thead>
+      <tbody>
+        <tr><td class="k"><span class="tag t-bad">NOLINK</span></td><td class="k">本機判斷</td><td>超過 1 秒沒收到任何下控封包。<b>這才是斷線</b>，先查接線與準位。</td></tr>
+        <tr><td class="k"><span class="tag t-bad">FAULT</span></td><td class="k">下控</td><td>ERROR 旗標非 0。此狀態下下控通常不會輸出阻力。</td></tr>
+        <tr><td class="k"><span class="tag t-live">RUN</span></td><td class="k">下控</td><td>回報 <code>RUNNING</code>（0x02），阻力輸出中。</td></tr>
+        <tr><td class="k"><span class="tag t-ok">READY</span></td><td class="k">下控</td><td>回報 <code>READY</code>（0x01），已就緒但未輸出。</td></tr>
+        <tr><td class="k"><span class="tag t-mute">IDLE</span></td><td class="k">下控</td><td>通訊正常，但兩個旗標都沒有。</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>ERROR 旗標對照（第 4 行的 ERR 欄位）</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="k">位元</th><th class="k">名稱</th><th>說明</th></tr></thead>
+      <tbody>
+        <tr><td class="k"><code>0x01</code></td><td class="k">COMM_TIMEOUT</td><td>下控端偵測到通訊逾時</td></tr>
+        <tr><td class="k"><code>0x02</code></td><td class="k">RPM_FAIL</td><td>轉速訊號異常</td></tr>
+        <tr><td class="k"><code>0x04</code></td><td class="k">POWER_FAIL</td><td>電源異常</td></tr>
+        <tr><td class="k"><code>0x08</code></td><td class="k">COIL_OUTPUT_FAIL</td><td>線圈輸出異常</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">是<b>位元旗標，會疊加</b>。例如 <code>ERR 0009</code> = <code>COMM_TIMEOUT</code> + <code>COIL_OUTPUT_FAIL</code>。</p>
+</section>
+
+<!-- ============ 4 按鍵 ============ -->
+<section>
+  <h2 data-n="4">按鍵操作</h2>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th class="k">按鍵</th><th class="k">腳位</th><th class="k">功能</th><th>短按</th><th>長按 0.8 秒</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="k"><span class="key">↑</span></td><td class="k"><code>D7</code></td>
+          <td class="k">目標值 +</td>
+          <td>增加一格</td>
+          <td>KP / ERG：連續遞增，按住約 2 秒後加速 8 倍。<br><b>DUTY：跳檔</b>，每 0.44 秒停靠下一檔 0 / 5 / 10 / 15 / 20 / 25 / 30 / 40 / 50 / 60 / 70 / 75 / 80 / 90 / 100 %。按著的時候只改 OLED 上的數字，<b>放開才送給下控</b>（FW 0.5 起）</td>
+        </tr>
+        <tr>
+          <td class="k"><span class="key">↓</span></td><td class="k"><code>D6</code></td>
+          <td class="k">目標值 −</td>
+          <td>減少一格</td>
+          <td>連續遞減，同上</td>
+        </tr>
+        <tr>
+          <td class="k"><span class="key">*</span></td><td class="k"><code>D2</code></td>
+          <td class="k"><b>開始</b></td>
+          <td><b>送出 SET_CONTROL → START</b><br>
+              <span style="color:var(--ink-soft);font-size:13px">FAULT 狀態下：第一次按送 <code>RESET_ERROR</code>；
+              若錯誤清不掉，<b>再按一次會強制送出啟動序列</b></span><br>
+              <span style="color:var(--ink-soft);font-size:13px"><b>DUTY 運轉中（FW 0.6 起）：開／關「降阻力前自動歸零」</b>——開啟後每次往下調，先送 duty 0、停設定的秒數、再送新值；狀態列顯示 <code>RUN+D</code>（磁滯測試用）</span></td>
+          <td>切換模式 KP → ERG → DUTY → SEQ<br>
+              <span style="color:var(--ink-soft);font-size:13px">運轉中不允許，會顯示 <code>STOP FIRST</code></span><br>
+              <span style="color:var(--ink-soft);font-size:13px"><b>DUTY 運轉中（FW 0.6 起）：換歸零長度</b> 0.5 → 1 → 2 → 5 秒（預設 1 秒）</span></td>
+        </tr>
+        <tr>
+          <td class="k"><span class="key">#</span></td><td class="k"><code>D4</code></td>
+          <td class="k"><b>停止</b></td>
+          <td>送出 <code>STOP</code></td>
+          <td><b>安全歸零</b>：目標值歸 0 後再送 STOP</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>三種模式的步進與範圍</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="k">模式</th><th class="k">範圍</th><th class="k">每按一下</th><th>送出的 target</th></tr></thead>
+      <tbody>
+        <tr><td class="k"><b>KP</b></td><td class="k">0.0 – 14.0</td><td class="k">0.1</td><td>數值 ×10（5.0 → <code>50</code>）</td></tr>
+        <tr><td class="k"><b>ERG</b></td><td class="k">0 – 3000 W</td><td class="k">5 W</td><td>直接是瓦特（250 → <code>250</code>）</td></tr>
+        <tr><td class="k"><b>DUTY</b></td><td class="k">0 – 100 %</td><td class="k">0.1 %</td><td>數值 ×10（50% → <code>500</code>，2.4% → <code>24</code>）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>SEQ 模式：自動測試序列（FW 0.7 起）</h3>
+  <p>長按 <span class="key">*</span> 依序切換 KP → ERG → DUTY → <b>SEQ</b>。SEQ 在協定上就是 DUTY 模式，只是 duty 由 Nano 照表自動切換、自動計時。功率機轉速仍由人工設定。</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="k">按鍵</th><th>動作</th></tr></thead>
+      <tbody>
+        <tr><td class="k"><span class="key">↑</span> <span class="key">↓</span></td><td>選序列（第一行顯示 <code>SEQ2 HOLD5</code>）。執行中無作用，避免誤觸</td></tr>
+        <tr><td class="k"><span class="key">*</span> 點一下</td><td>開始。沒開阻力的話會自動送啟動序列</td></tr>
+        <tr><td class="k"><span class="key">#</span></td><td>隨時中止（同時送 STOP）。長按 = 安全歸零</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>執行中第 4 行顯示 <code>STEP 3/6  27s</code>（第幾步、這一步還剩幾秒）；每切一步訊息列顯示 <code>SQ2 3/6 30.0%</code>，並寫進記錄頁 CSV。跑完顯示 <code>SEQ DONE</code>，停在 duty 0、阻力不關。下控掉出 RUNNING 超過 3 秒會自動中止（<code>SEQ STOP: NOT RUN</code>）；LINK LOST 一下就回來不影響。</p>
+  <p><b>功率機一次最長只錄 600 秒、中途不能存檔</b>，所以每個量測序列都在 480 秒內跑完，讓殘留消失的 5 分鐘拆成獨立的 <b>REST5</b>（不用錄）。流程：</p>
+  <p style="margin-left:1em">功率機按記錄 → 選序列、點 <span class="key">*</span> → <code>SEQ DONE</code> → 功率機存檔 →（下一個需要乾淨狀態時）跑 REST5 → 下一個</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="k">編號</th><th class="k">名稱</th><th>內容（duty% / 秒）</th><th class="k">秒</th><th class="k">錄</th></tr></thead>
+      <tbody>
+        <tr><td class="k">1</td><td class="k">REST5</td><td>duty 0 停 5 分鐘，讓殘留消失</td><td class="k">300</td><td class="k">不用</td></tr>
+        <tr><td class="k">2</td><td class="k">HOLD5</td><td>0/40 → 30/40 → 0/30 → 60/40 → <b>30/300</b> → 0/30。直接降後停 5 分鐘</td><td class="k">480</td><td class="k">✓</td></tr>
+        <tr><td class="k">3</td><td class="k">PATH-A</td><td>0 → 30 → 0 → 60 → <b>30（直接降）</b> → 0</td><td class="k">220</td><td class="k">✓</td></tr>
+        <tr><td class="k">4</td><td class="k">PATH-B</td><td>0 → 60 → 50 → 40 → <b>30（分段降）</b> → 0。前面先跑 REST5</td><td class="k">230</td><td class="k">✓</td></tr>
+        <tr><td class="k">5</td><td class="k">REV-A</td><td>0 → 60 → 30 → <b>45（降了再升）</b> → 0</td><td class="k">190</td><td class="k">✓</td></tr>
+        <tr><td class="k">6</td><td class="k">REV-B</td><td>0 → <b>45（從 0 上）</b> → 0。前面先跑 REST5</td><td class="k">110</td><td class="k">✓</td></tr>
+        <tr><td class="k">7</td><td class="k">UP0-70</td><td>0 → 10 → 20 … 70，各 40 秒 → 0。上升曲線低段</td><td class="k">350</td><td class="k">✓</td></tr>
+        <tr><td class="k">8</td><td class="k">UP80+</td><td>0 → 80 → 90 → 100，各 30 秒 → 0。上升曲線高段</td><td class="k">160</td><td class="k">✓</td></tr>
+        <tr><td class="k">9–12</td><td class="k">DN100 / DN80 / DN60 / DN40</td><td>0 → 高點 → 每次降 10 … 10 → 0。下降曲線，每條前面先跑 REST5</td><td class="k">230–440</td><td class="k">✓</td></tr>
+        <tr><td class="k">13–16</td><td class="k">DIP.5 / DIP1 / DIP2 / DIP5</td><td>0 → 30 → 0 → 60 → <b>歸零 0.5／1／2／5 秒再到 30</b> → 0。每個前面先跑 REST5</td><td class="k">220</td><td class="k">✓</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ 5 事件訊息 ============ -->
+<section>
+  <h2 data-n="5">事件訊息全表</h2>
+  <p class="lede">第五行的訊息。<b>分辨訊息是「下控說的」還是「本機說的」，是診斷的關鍵。</b></p>
+
+  <h3>下控回應正常 · 序列成功</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="k">訊息</th><th>意義</th></tr></thead>
+      <tbody>
+        <tr><td class="k"><code>LINK UP</code></td><td>開始收到下控封包</td></tr>
+        <tr><td class="k"><code>VIN 24.03V FW1.0.0</code></td><td>開機查詢成功，下控回報供電電壓與韌體版本</td></tr>
+        <tr><td class="k"><code>RESISTANCE ON</code></td><td><b>SET_CONTROL → START 序列完整成功</b>，阻力已開啟</td></tr>
+        <tr><td class="k"><code>ALREADY RUNNING</code></td><td>下控已在運轉，略過 START</td></tr>
+        <tr><td class="k"><code>STOPPED</code></td><td>STOP 已被接受</td></tr>
+        <tr><td class="k"><code>SAFE ZERO DONE</code></td><td>目標歸零加 STOP 都完成</td></tr>
+        <tr><td class="k"><code>ERROR CLEARED</code></td><td>RESET_ERROR 已被接受</td></tr>
+        <tr><td class="k"><code>DIP LEN 1.0s</code></td><td>短暫歸零的長度已改成 1.0 秒</td></tr>
+        <tr><td class="k"><code>AUTO DIP ON 1.0s</code> / <code>OFF</code></td><td>降阻力前自動歸零：開啟（歸零 1.0 秒）／關閉</td></tr>
+        <tr><td class="k"><code>DIP 0 FOR 1.0s</code></td><td>偵測到往下調，開始歸零（計時從下控 ACK 起算）</td></tr>
+        <tr><td class="k"><code>DIP END, TO 30.0%</code></td><td>歸零結束，送出新的目標值</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>下控明確拒絕 · <span style="color:var(--live)">通訊是正常的</span></h3>
+  <p class="lede">格式 <code>NG &lt;指令&gt; &lt;原因&gt;</code>。指令為 <span class="m">SETCTL / START / STOP / RESET</span>，未知指令顯示十六進位。</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="k">原因</th><th class="k">協定值</th><th>意義</th></tr></thead>
+      <tbody>
+        <tr><td class="k"><code>BAD_STATE</code></td><td class="k">5</td><td>下控目前狀態不接受這個指令 —— 最常見</td></tr>
+        <tr><td class="k"><code>PARAM_ERR</code></td><td class="k">2</td><td>參數超出範圍</td></tr>
+        <tr><td class="k"><code>BUSY</code></td><td class="k">3</td><td>下控忙碌中</td></tr>
+        <tr><td class="k"><code>CRC_ERR</code></td><td class="k">1</td><td>下控認為封包 CRC 有誤</td></tr>
+        <tr><td class="k"><code>UNK_CMD</code></td><td class="k">4</td><td>下控不認得這個指令</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>通訊層問題</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="k">訊息</th><th>意義與處理</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="k"><code>ACK TIMEOUT &lt;指令&gt;</code></td>
+          <td><b>送出後 600 毫秒內沒有任何回應。</b>下控沒收到，或收到了但不回應。<br>若逾時的是<b>目標值推送</b>（調整 ↑ ↓ 觸發的 SETCTL），本機會自動補送，最多三次。</td>
+        </tr>
+        <tr>
+          <td class="k"><code>LATE ACK &lt;指令&gt; r&lt;n&gt;</code></td>
+          <td><b>逾時之後才收到 ACK。</b><code>n</code> 是上表的協定值。
+              出現這個代表下控<b>有回應、只是超過 600ms</b> —— 與「完全沒回」是不同的問題。</td>
+        </tr>
+        <tr>
+          <td class="k"><code>SET FAILED, RETRY</code></td>
+          <td><b>目標值補送三次都沒收到 ACK，已放棄。</b>本機設定值與下控實際採用的值不一致，
+              標題列會留著 <span class="m">*</span>。此時畫面上的 duty 不代表下控真正在跑的 duty，
+              <b>該筆量測作廢</b>，請重調一次目標值。</td>
+        </tr>
+        <tr>
+          <td class="k"><code>LINK LOST</code></td>
+          <td>超過 1 秒沒收到 STATUS_REPORT。徽章會同時變成 NOLINK。</td>
+        </tr>
+        <tr>
+          <td class="k"><code>ERR REPORT 0x02</code></td>
+          <td>下控<b>主動送出</b> ERROR_REPORT。數值對照第 3 節的 ERROR 旗標表。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>本機操作防呆 · 沒有送出任何封包</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="k">訊息</th><th>意義</th></tr></thead>
+      <tbody>
+        <tr><td class="k"><code>BUSY, WAIT</code></td><td>上一個指令序列還沒跑完，稍候再按</td></tr>
+        <tr><td class="k"><code>STOP FIRST</code></td><td>運轉中不允許切換模式，請先按停止</td></tr>
+        <tr><td class="k"><code>LOW RAM &lt;n&gt;</code></td><td><b>本機記憶體不足，正常不應出現。</b>看到請回報</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ 6 判讀指南 ============ -->
+<section>
+  <h2 data-n="6">送出指令後的四種結果</h2>
+  <p class="lede">按下開始鍵 <span class="key key-inline">*</span> 之後，看第五行的訊息落在哪一類 —— 四種結果指向完全不同的原因。</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="k">看到</th><th class="k">通訊</th><th>結論與下一步</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="k"><span class="tag t-ok">RESISTANCE ON</span></td>
+          <td class="k">正常</td>
+          <td><b>完全成功。</b><span class="m">*</span> 消失、TGT 對上設定值、徽章變 RUN。</td>
+        </tr>
+        <tr>
+          <td class="k"><span class="tag t-live">NG …</span></td>
+          <td class="k">正常</td>
+          <td><b>下控收到了、聽懂了，但拒絕。</b>雙向通訊沒問題，問題在下控的狀態機或參數。原因碼就是答案。</td>
+        </tr>
+        <tr>
+          <td class="k"><span class="tag t-bad">ACK TIMEOUT …</span></td>
+          <td class="k">可疑</td>
+          <td><b>下控沒有回應。</b>若隨後出現 <code>LATE ACK</code>，表示只是慢，不是沒回；
+              若始終沒有，代表它收得到卻不回應 —— 依協定即使拒絕也應回覆結果碼。</td>
+        </tr>
+        <tr>
+          <td class="k"><span class="tag t-bad">NOLINK</span></td>
+          <td class="k">中斷</td>
+          <td><b>連封包都收不到。</b>先查接線、準位與共地，此時按任何鍵都沒有意義。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ 7 標準流程 ============ -->
+<section>
+  <h2 data-n="7">標準測試流程</h2>
+
+  <h3>基本啟動測試</h3>
+  <ol class="steps">
+    <li><b>確認徽章不是 NOLINK。</b><span class="sub">真機需要先踩踏喚醒才會開始通訊。</span></li>
+    <li><b>用 <span class="key key-inline">↑</span> <span class="key key-inline">↓</span> 調整目標值。</b><span class="sub">從低值開始，例如 KP 1.0。此時只改本機設定，阻力不會動，<span class="m">*</span> 會亮起。</span></li>
+    <li><b>按開始鍵 <span class="key key-inline">*</span>。</b><span class="sub">送出完整的 SET_CONTROL → START 序列。</span></li>
+    <li><b>檢查三件事。</b><span class="sub">訊息是否為 <code>RESISTANCE ON</code>、<span class="m">*</span> 是否消失、TGT 是否等於你設的值。</span></li>
+    <li><b>運轉中再調整 <span class="key key-inline">↑</span> <span class="key key-inline">↓</span>。</b><span class="sub">此時會即時送出 SET_CONTROL，TGT 應跟著變動。這一步驗證的是「已啟動狀態下改值」。</span></li>
+    <li><b>按停止鍵 <span class="key key-inline">#</span>。</b><span class="sub">訊息 <code>STOPPED</code>，徽章回到 READY。心跳會繼續送出，這是正常的。</span></li>
+  </ol>
+
+  <h3>故障狀態下的測試</h3>
+  <ol class="steps">
+    <li><b>記下 ERR 欄位的值。</b><span class="sub">對照第 3 節的旗標表，可能是多個錯誤疊加。</span></li>
+    <li><b>按一次開始鍵 <span class="key key-inline">*</span> 清除錯誤。</b><span class="sub">此時送出的是 RESET_ERROR。</span></li>
+    <li><b>觀察錯誤是否立刻復發。</b><span class="sub">馬上又回到 FAULT，表示故障是現行的、不是殘留狀態。</span></li>
+    <li><b>再按一次開始鍵 <span class="key key-inline">*</span>，強制送出啟動序列。</b><span class="sub">用來確認下控在故障狀態下是接受、拒絕、還是不回應控制指令。三種結果都是有效資訊。</span></li>
+  </ol>
+</section>
+
+<!-- ============ 8 注意事項 ============ -->
+<section>
+  <h2 data-n="8">使用注意事項</h2>
+  <div class="card" style="display:flex;flex-direction:column;gap:11px">
+    <p><b>本機會持續送出心跳。</b>開機後以每秒一次的頻率送出 HEARTBEAT，
+       <b>按下停止鍵也不會停</b>。這是刻意的 —— 心跳一旦中斷，下控會在 3 秒後關閉阻力、30 秒後斷電。</p>
+    <p><b>因此本機插著的時候，下控的 30 秒自動斷電不會發生。</b>
+       若需要讓下控斷電，請拔除本機電源或拔掉 D9 這條線，再等 30 秒。</p>
+    <p><b>本機不會主動開啟阻力。</b>開機後停在待機狀態，只送心跳，必須按下開始鍵 <span class="key key-inline">*</span> 才會送出控制指令。</p>
+    <p><b>隨時可以長按停止鍵 <span class="key key-inline">#</span> 安全歸零。</b>目標值歸 0 之後再送 STOP，是最保險的中止方式。</p>
+  </div>
+</section>
+
+<footer>
+  <span>EMS Bike UART 通訊協定 v0.2 · 心跳 1 Hz · ACK 逾時 600 ms · 鏈路逾時 1 s</span>
+  <span class="m">ems_head_unit v0.2</span>
+</footer>
+
+</div>

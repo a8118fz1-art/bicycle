@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>BLE 模組探測 — EMS Bike</title>
+<style>
+  :root{
+    --paper:#eaeef1; --panel:#fff; --rule:#c3ced7; --ink:#16212c; --ink-soft:#5b6b7a;
+    --signal:#0d6e78; --live:#b45f06; --fault:#a3231c;
+    --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI","Noto Sans TC",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.55}
+  .wrap{max-width:780px;margin:0 auto;padding:18px 14px 48px}
+  header{border-bottom:2px solid var(--ink);padding-bottom:10px;margin-bottom:14px}
+  h1{font-size:18px;margin:0}
+  h1 small{display:block;font-weight:400;font-size:12px;color:var(--ink-soft);letter-spacing:.05em;margin-top:3px}
+  .panel{background:var(--panel);border:1px solid var(--rule);border-radius:3px;padding:14px;margin-top:14px}
+  h2{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-soft);margin:0 0 9px;font-weight:600}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .row>*{flex:1 1 130px}
+  button{padding:9px 11px;border:1px solid var(--ink);border-radius:2px;background:var(--panel);
+         color:var(--ink);font-family:var(--mono);font-size:12.5px;cursor:pointer}
+  button:hover:not(:disabled){background:var(--ink);color:var(--panel)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:var(--signal);border-color:var(--signal);color:#fff;font-weight:600}
+  button.primary:hover:not(:disabled){background:#0a565e}
+  input{width:100%;padding:8px;border:1px solid var(--rule);border-radius:2px;background:#fbfcfd;
+        font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+  pre{font-family:var(--mono);font-size:12px;background:#f4f7f9;border:1px solid var(--rule);border-radius:2px;
+      padding:9px;margin:9px 0 0;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all}
+  .note{font-size:12.5px;color:var(--ink-soft);border-left:3px solid var(--live);padding:5px 0 5px 10px;margin:10px 0 0}
+  .note b{color:var(--ink)}
+  .bad{border-left-color:var(--fault)}
+  .bad b{color:var(--fault)}
+  .ok{color:var(--signal);font-weight:600}
+  .no{color:var(--fault)}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:8px}
+  th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--rule)}
+  th{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft)}
+  td{font-family:var(--mono);word-break:break-all}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>BLE 模組探測<small>找出 BLE-Nano 的服務與特徵 UUID</small></h1>
+</header>
+
+<div id="ctxWarn"></div>
+
+<section class="panel">
+  <h2>1 · 掃描並連線</h2>
+  <p class="note">
+    按下按鈕後會列出<b>附近所有 BLE 裝置</b>。<b>清單裡找得到你的板子，就代表模組有在廣播</b> ——
+    這是最重要的一件事。找不到的話，模組可能還停在舊專案設定的主機模式，
+    那要先用 AT 指令切回周邊模式才有得談。
+  </p>
+  <div class="row">
+    <button class="primary" id="scanBtn">掃描並連線</button>
+    <button id="dcBtn" disabled>斷線</button>
+  </div>
+  <pre id="log">尚未開始。</pre>
+</section>
+
+<section class="panel">
+  <h2>2 · 探測結果</h2>
+  <p class="note">
+    瀏覽器<b>不允許列舉未宣告的 UUID</b>，所以這裡是拿透明序列埠模組的常見 UUID 逐一去試。
+    下表打勾的那一組就是你的模組用的。
+  </p>
+  <table id="resTbl">
+    <thead><tr><th>候選服務</th><th>模組</th><th>結果</th></tr></thead>
+    <tbody id="resBody"><tr><td colspan="3">—</td></tr></tbody>
+  </table>
+  <pre id="detail">—</pre>
+</section>
+
+<section class="panel">
+  <h2>3 · 收發測試</h2>
+  <p class="note">
+    找到特徵之後，這裡可以直接對模組送資料。<b>送 <code>55 AA 01 40 FA 66 0D</code>（HEARTBEAT）</b>，
+    如果 Nano 已經燒了橋接韌體、而且接著下控，下方應該會收到 STATUS_REPORT 的位元組。
+  </p>
+  <div class="row" style="margin-bottom:0">
+    <input id="txHex" value="55 AA 01 40 FA 66 0D" aria-label="要送出的 hex" />
+    <button id="sendBtn" disabled>送出</button>
+  </div>
+  <pre id="rx">（收到的位元組會顯示在這裡）</pre>
+</section>
+
+<script>
+/* 透明序列埠 BLE 模組的常見 UUID。
+   瀏覽器規定 optionalServices 必須事先宣告，連上去之後不能自由列舉，
+   所以只能用候選清單逐一嘗試 —— 這幾組涵蓋市面上絕大多數模組。 */
+const CANDIDATES=[
+  {svc:'0000ffe0-0000-1000-8000-00805f9b34fb', name:'FFE0', vendor:'HM-10 / CC254x / AT-09 / JDY（最常見）'},
+  {svc:'0000fff0-0000-1000-8000-00805f9b34fb', name:'FFF0', vendor:'部分國產模組'},
+  {svc:'6e400001-b5a3-f393-e0a9-e50e24dcca9e', name:'NUS',  vendor:'Nordic UART Service（nRF 系列）'},
+  {svc:'49535343-fe7d-4ae5-8fa9-9fafd205e455', name:'ISSC', vendor:'Microchip / ISSC（RN4870、BM70）'},
+  {svc:'0000ffe5-0000-1000-8000-00805f9b34fb', name:'FFE5', vendor:'部分模組的獨立寫入服務'}
+];
+
+const $=id=>document.getElementById(id);
+let device=null, server=null, notifyChar=null, writeChar=null;
+
+function log(s){ const el=$('log'); el.textContent+=(el.textContent==='尚未開始。'?'':'\n')+s; el.scrollTop=el.scrollHeight; }
+const hex=b=>Array.from(b).map(x=>x.toString(16).padStart(2,'0')).join(' ');
+
+/* Web Bluetooth 需要安全來源。localhost 算安全，區網 http:// 不算 —— 這是最常見的卡關點 */
+(function checkCtx(){
+  const box=$('ctxWarn');
+  if(!('bluetooth' in navigator)){
+    box.innerHTML='<div class="panel"><p class="note bad"><b>這個瀏覽器不支援 Web Bluetooth。</b>'+
+      '安卓請用 Chrome；iOS 的 Safari 與 Chrome 都不支援，要改用 Bluefy 之類的瀏覽器。</p></div>';
+  }else if(!window.isSecureContext){
+    box.innerHTML='<div class="panel"><p class="note bad"><b>目前不是安全來源，Web Bluetooth 會被擋掉。</b>'+
+      '請改用 <code>https://</code>，或在本機用 <code>http://localhost:8000</code> 開啟'+
+      '（localhost 算安全來源，區網 IP 的 http:// 不算）。</p></div>';
+  }
+})();
+
+async function probe(){
+  const body=$('resBody'); body.innerHTML='';
+  let found=0;
+  for(const c of CANDIDATES){
+    const tr=document.createElement('tr');
+    let cell='<span class="no">無</span>';
+    try{
+      const s=await server.getPrimaryService(c.svc);
+      const chars=await s.getCharacteristics();
+      cell='<span class="ok">找到，'+chars.length+' 個特徵</span>';
+      found++;
+      let txt='服務 '+c.name+'  '+c.svc+'\n';
+      for(const ch of chars){
+        const p=ch.properties;
+        const flags=['notify','indicate','write','writeWithoutResponse','read']
+          .filter(k=>p[k]).join(' / ') || '（無）';
+        txt+='  特徵 '+ch.uuid+'\n        '+flags+'\n';
+        /* 能通知的拿來收，能寫的拿來送；同一個特徵兩者皆可的情況很常見 */
+        if((p.notify||p.indicate) && !notifyChar) notifyChar=ch;
+        if((p.write||p.writeWithoutResponse) && !writeChar) writeChar=ch;
+      }
+      $('detail').textContent+=($('detail').textContent==='—'?'':'\n')+txt;
+    }catch(e){ /* 這個候選不存在，正常 */ }
+    tr.innerHTML='<td>'+c.name+'</td><td>'+c.vendor+'</td><td>'+cell+'</td>';
+    body.appendChild(tr);
+  }
+  if(!found){
+    $('detail').textContent='五組候選都沒有命中。\n\n'+
+      '模組可能用了少見的自訂 UUID。這種情況就只能用手機的 nRF Connect 掃出實際值，\n'+
+      '再把它加進本頁 CANDIDATES 清單。';
+    log('探測完成：沒有命中任何候選 UUID。');
+  }else{
+    log('探測完成：命中 '+found+' 組。');
+    if(notifyChar){
+      await notifyChar.startNotifications();
+      notifyChar.addEventListener('characteristicvaluechanged',e=>{
+        const b=new Uint8Array(e.target.value.buffer);
+        const el=$('rx');
+        el.textContent=(el.textContent.startsWith('（')?'':el.textContent)+hex(b)+' ';
+        el.scrollTop=el.scrollHeight;
+      });
+      log('已訂閱通知：'+notifyChar.uuid);
+    }
+    if(writeChar){ $('sendBtn').disabled=false; log('可寫入特徵：'+writeChar.uuid); }
+  }
+}
+
+$('scanBtn').onclick=async()=>{
+  try{
+    $('detail').textContent='—'; notifyChar=writeChar=null;
+    log('開啟裝置選擇器⋯⋯（清單裡有你的板子就代表它在廣播）');
+    device=await navigator.bluetooth.requestDevice({
+      acceptAllDevices:true,
+      optionalServices:CANDIDATES.map(c=>c.svc)
+    });
+    log('已選擇：'+(device.name||'(無名稱)')+'  id='+device.id);
+    device.addEventListener('gattserverdisconnected',()=>{
+      log('已斷線。'); $('dcBtn').disabled=true; $('sendBtn').disabled=true;
+    });
+    server=await device.gatt.connect();
+    log('GATT 已連線，開始逐一試候選 UUID⋯⋯');
+    $('dcBtn').disabled=false;
+    await probe();
+  }catch(e){ log('失敗：'+e.message); }
+};
+
+$('dcBtn').onclick=()=>{ if(device&&device.gatt.connected) device.gatt.disconnect(); };
+
+$('sendBtn').onclick=async()=>{
+  if(!writeChar) return;
+  const bytes=$('txHex').value.trim().split(/[\s,]+/).map(s=>parseInt(s,16));
+  if(bytes.some(isNaN)){ log('hex 格式有誤。'); return }
+  const buf=Uint8Array.from(bytes);
+  try{
+    /* 有些模組只支援 writeWithoutResponse，兩種都試 */
+    if(writeChar.properties.write) await writeChar.writeValueWithResponse(buf);
+    else await writeChar.writeValueWithoutResponse(buf);
+    log('已送出 '+buf.length+' bytes：'+hex(buf));
+  }catch(e){ log('送出失敗：'+e.message); }
+};
+</script>
+</div>
+</body>
+</html>
