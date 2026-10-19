@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""dyno_f1timer（配 Mega FW 0.12M 串接計畫 + 記錄頁 mega_status.json）
+"""dyno_f1timer（配 Mega FW 0.13M 串接計畫 + 記錄頁 mega_status.json）
 
 流程：記錄頁連上 Mega 並寫 mega_status.json → 本程式檢查（視窗、權限、狀態檔、Mega 選的計畫）→ ARMED →
 功率機只認 F1（每下 = 下一組，按滿 N 下自己停，組長不影響換組）。F2 = 第 1 組（穩定組）→ 穩定後操作員在
@@ -30,7 +30,7 @@ CATCHUP_GAP_S = 1.5      # 狀態檔停更恢復後補送 F1 之間的間隔（�
 ACT_EARLY_S = 8.0        # 送 F1 前幾秒先把功率機切到前景
 BAD_EVENT = re.compile(r"ABORT|LATE|NOT RUN|BOOT")
 # 0.12M：功率機最多 10 組 → 60A、COMP 各拆兩個。順序 = .ino PLANS[] = 記錄頁 PLAN_NAME（load_plan 會核對 plans.json）
-PLAN_IDS = {"60A1": 1, "60A2": 2, "60B": 3, "CMP1": 4, "CMP2": 5}
+PLAN_IDS = {"60A1": 1, "60A2": 2, "60B": 3, "CMP1": 4, "CMP2": 5, "C90A": 6, "C90B": 7}   # 0.13M 加 C90A / C90B
 BAR = "!" * 64
 
 
@@ -564,7 +564,7 @@ def do_check(cfg, plan, ops, log):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="功率機 F1 定時器（Mega 0.12M 計畫）")
+    ap = argparse.ArgumentParser(description="功率機 F1 定時器（Mega 0.13M 計畫）")
     ap.add_argument("--plan", help=" / ".join(PLAN_IDS))
     ap.add_argument("--config", default=os.path.join(HERE, "config.toml"))
     g = ap.add_mutually_exclusive_group()

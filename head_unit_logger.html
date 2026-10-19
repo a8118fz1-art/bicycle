@@ -148,7 +148,7 @@ const HEADER = 'pc_time,pc_epoch_ms,type,nano_ms,flywheel_rpm,cadence,pwr_w,curr
              + 'duty_pct,tgt_reported,target_local,mode,flags,err,link,vin_v,note,'
              + 'plan,grp,seg,rest,hold,seq,step,sel';   // FW 0.11M 起追加（舊 FW 這 8 欄留空）
 /* 0.12M：計畫編號（遙測 plan / sel 欄）→ 名字。要與 Mega .ino 的 PLANS[] 順序、dyno_f1timer.py 的 PLAN_IDS 同步 */
-const PLAN_NAME = ['', '60A1', '60A2', '60B', 'CMP1', 'CMP2'];
+const PLAN_NAME = ['', '60A1', '60A2', '60B', 'CMP1', 'CMP2', 'C90A', 'C90B'];   // 0.13M 加 C90A / C90B
 const NO_PLAN = ['', '', '', '', '', '', '', ''];
 
 function log(s) {
