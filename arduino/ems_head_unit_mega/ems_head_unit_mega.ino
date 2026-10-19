@@ -2,10 +2,10 @@
   ems_head_unit_mega.ino — EMS Bike 獨立測試用手把單元，Arduino Mega 2560 版
 
   ★ 這是 ems_head_unit.ino 的 Mega 2560 備援版（2026-10-12，BLE-Nano 5V 對 GND 短路燒毀）。
-    功能、按鍵、遙測格式與 Nano 版 FW 0.7 完全相同，只有硬體相關的三處不同：
+    功能、按鍵、遙測格式以 Nano 版 FW 0.7 為基礎（0.8M 起 Mega 版另加功能，見 FW_VERSION 註解），只有硬體相關的三處不同：
       1. 下控 UART 改用硬體 Serial1（RX1 = D19、TX1 = D18），不用 AltSoftSerial
       2. OLED I2C 在 Mega 上是 D20 = SDA、D21 = SCL（不是 A4 / A5）
-      3. FW_VERSION 標 "0.7M"，回報問題時分得出是哪一版
+      3. FW_VERSION 標 "0.11M"，回報問題時分得出是哪一版
     之後改 Nano 版時，這份要跟著改；換回 Nano 後這份可以刪掉。
 
   ── 以下為原 Nano 版說明 ──
@@ -57,7 +57,10 @@
 #include <stdarg.h>
 
 /* ==================== 設定 ==================== */
-#define FW_VERSION         "0.7M"  // 顯示在待機畫面上，回報問題時用來對版本
+#define FW_VERSION         "0.11M"  // 顯示在待機畫面上，回報問題時用來對版本；0.8M 加 SLOWDN / ZDWELL；
+                                   // 0.9M：斷線逾時自動中止＋歸零、SET_CONTROL 收 ACK 才算數、SEQ DONE 自動 STOP、序列不受按鍵擋推送
+                                   // 0.10M：SET 0 失敗仍送 STOP、BAD_STATE / 已停止就結束歸零、RX 斷時盲送 STOP、斷線暫停計時
+                                   // 0.11M：串接計畫 60A / 60B / COMP（段間休息 300 s、對齊功率機的組）、遙測 S 行加 plan 欄位
 #define EMS_BAUD          19200   // 通訊協定 §2
 #define TELEM_BAUD       115200   // D0/D1 遙測輸出速率
 #define OLED_ADDR          0x3C
@@ -67,6 +70,11 @@
 #define LINK_TIMEOUT_MS    1000   // 下控 STATUS 週期 100ms，1 秒沒收到視為斷線
 #define TGT_PUSH_MS         250   // 目標值連續調整時的送出節流
 #define TGT_SET_RETRY         3   // SET_CONTROL 沒收到 ACK 時最多補送幾次
+/* 序列跑著時鏈路連續中斷超過這麼久就中止序列並歸零。下控已知每 ~6.5 秒有一次
+   約 1.1 秒的 STATUS 空窗（HANDOFF §LINK LOST），5 秒是它的 4 倍以上，不會被誤觸；
+   又短於一個量測點 30～40 秒，真斷線時不會在錯的 duty 上停太久。 */
+#define SEQ_LINK_ABORT_MS  5000
+#define ZERO_RETRY_MS      1000   // 保證歸零：沒成功就每隔這麼久重來一次（SET 0 → STOP），直到成功
 #define OLED_REFRESH_MS     150
 #define TELEMETRY_MS        500   // ASCII 遙測週期，設 0 關閉
 /*
@@ -276,9 +284,17 @@ static uint8_t  dipPhase = 0;     // 0 = 沒在歸零，1 = 待送 0，2 = 歸�
 static uint8_t  dipRetry = 0;
 static uint32_t dipT0    = 0;
 static uint16_t dipLenMs = 1000;  // 這一次歸零的長度；手動模式取 DIP_MS[dipIdx]，序列模式由步驟指定
-static uint16_t lastSent = 0;     // 最後一次送給下控的 SET_CONTROL 目標值
+static uint16_t lastSent = 0;     // 最後一次「下控 ACK 確認過」的 SET_CONTROL 目標值（0.9M 起收到 ACK 才更新）
+static uint16_t pendVal  = 0;     // 送出中、還在等 ACK 的 SET_CONTROL 目標值
+/* 保證歸零（0.9M）：設起來後主迴圈會一直嘗試 SET_CONTROL(0) → STOP，兩個都 ACK OK 才清掉。
+   斷線時先等，鏈路回來立刻送；失敗就每 ZERO_RETRY_MS 重來。避免最後一包沒送到、下控停在 30%。 */
+static bool     zeroPending = false;
+static uint16_t zeroTries   = 0;
+static uint32_t zeroAt      = 0;
+static PGM_P    zeroWhy     = NULL;   // 0.10M：觸發歸零的原因（SEQ DONE / ABORT），結果訊息附在後面不蓋掉
+static uint32_t blindStopAt = 0;      // 0.10M：RX 斷線時盲送 STOP 的節流
 
-/* ==================== 自動測試序列（FW 0.7） ====================
+/* ==================== 自動測試序列（FW 0.7 起，0.9M 修改） ====================
    磁滯量測要切幾十個 duty、每段停固定秒數，手動按容易按錯（10/08 H 輪衝到 63.6、掉到 0.9）。
    序列跑在 DUTY 協定模式上；畫面上是第 4 個模式「SEQ」，長按 START 切過去。
    每一步：{ duty×10, 停留秒數, 切換前先歸零的毫秒數（0 = 直接切） }。
@@ -289,35 +305,44 @@ struct SeqStep { uint16_t duty, holdS, dipMs; };
    所以「讓殘留消失的 5 分鐘」拆成獨立的 REST5，那段不用錄 —— 流程是
    功率機按記錄 → 點 * → SEQ DONE → 功率機存檔 →（需要乾淨狀態時）跑 REST5 → 下一個。
    每個量測序列都以 0/40 開頭（量 tare）、0/30 結尾。 */
-static const SeqStep SQS_REST[] PROGMEM = { {0,300,0} };              // 不用錄
-static const SeqStep SQS_HOLD[] PROGMEM = {      // 從 60 直接降到 30 後停 5 分鐘：偏差會不會自己回落（480 秒）
+static constexpr SeqStep SQS_REST[] PROGMEM = { {0,300,0} };              // 不用錄
+static constexpr SeqStep SQS_HOLD[] PROGMEM = {      // 從 60 直接降到 30 後停 5 分鐘：偏差會不會自己回落（480 秒）
   {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,300,0},{0,30,0} };
-static const SeqStep SQS_PTHA[] PROGMEM = {      // 60→30 直接降（220 秒）
+static constexpr SeqStep SQS_PTHA[] PROGMEM = {      // 60→30 直接降（220 秒）
   {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,40,0},{0,30,0} };
-static const SeqStep SQS_PTHB[] PROGMEM = {      // 60→50→40→30 分段降，跟 PATH-A 比（230 秒）
+static constexpr SeqStep SQS_PTHB[] PROGMEM = {      // 60→50→40→30 分段降，跟 PATH-A 比（230 秒）
   {0,40,0},{600,40,0},{500,40,0},{400,40,0},{300,40,0},{0,30,0} };
-static const SeqStep SQS_REVA[] PROGMEM = {      // 60→30→45（190 秒）
+static constexpr SeqStep SQS_REVA[] PROGMEM = {      // 60→30→45（190 秒）
   {0,40,0},{600,40,0},{300,40,0},{450,40,0},{0,30,0} };
-static const SeqStep SQS_REVB[] PROGMEM = {      // 從 0 直接上 45，跟 REV-A 比（110 秒）
+static constexpr SeqStep SQS_REVB[] PROGMEM = {      // 從 0 直接上 45，跟 REV-A 比（110 秒）
   {0,40,0},{450,40,0},{0,30,0} };
-static const SeqStep SQS_UP[]   PROGMEM = {      // 上升曲線低段（350 秒）
+static constexpr SeqStep SQS_UP[]   PROGMEM = {      // 上升曲線低段（350 秒）
   {0,40,0},{100,40,0},{200,40,0},{300,40,0},{400,40,0},{500,40,0},{600,40,0},{700,40,0},{0,30,0} };
-static const SeqStep SQS_UPHI[] PROGMEM = {      // 上升曲線高段，分開跑以免功率機熱累積跳保護（160 秒）
+static constexpr SeqStep SQS_UPHI[] PROGMEM = {      // 上升曲線高段，分開跑以免功率機熱累積跳保護（160 秒）
   {0,40,0},{800,30,0},{900,30,0},{1000,30,0},{0,30,0} };
-static const SeqStep SQS_D100[] PROGMEM = {      // 下降曲線：從 100 往下（440 秒）
+static constexpr SeqStep SQS_D100[] PROGMEM = {      // 下降曲線：從 100 往下（440 秒）
   {0,40,0},{1000,30,0},{900,30,0},{800,30,0},{700,40,0},{600,40,0},{500,40,0},{400,40,0},
   {300,40,0},{200,40,0},{100,40,0},{0,30,0} };
-static const SeqStep SQS_D80[]  PROGMEM = {      // 380 秒
+static constexpr SeqStep SQS_D80[]  PROGMEM = {      // 380 秒
   {0,40,0},{800,30,0},{700,40,0},{600,40,0},{500,40,0},{400,40,0},{300,40,0},{200,40,0},{100,40,0},{0,30,0} };
-static const SeqStep SQS_D60[]  PROGMEM = {      // 310 秒
+static constexpr SeqStep SQS_D60[]  PROGMEM = {      // 310 秒
   {0,40,0},{600,40,0},{500,40,0},{400,40,0},{300,40,0},{200,40,0},{100,40,0},{0,30,0} };
-static const SeqStep SQS_D40[]  PROGMEM = {      // 230 秒
+static constexpr SeqStep SQS_D40[]  PROGMEM = {      // 230 秒
   {0,40,0},{400,40,0},{300,40,0},{200,40,0},{100,40,0},{0,30,0} };
 /* 降阻力前歸零 N 毫秒：每個都自帶「從 0 升上來的 30」當同一檔的基準（各 220 秒） */
-static const SeqStep SQS_DP05[] PROGMEM = { {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,40,500},{0,30,0} };
-static const SeqStep SQS_DP1[]  PROGMEM = { {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,40,1000},{0,30,0} };
-static const SeqStep SQS_DP2[]  PROGMEM = { {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,40,2000},{0,30,0} };
-static const SeqStep SQS_DP5[]  PROGMEM = { {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,40,5000},{0,30,0} };
+static constexpr SeqStep SQS_DP05[] PROGMEM = { {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,40,500},{0,30,0} };
+static constexpr SeqStep SQS_DP1[]  PROGMEM = { {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,40,1000},{0,30,0} };
+static constexpr SeqStep SQS_DP2[]  PROGMEM = { {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,40,2000},{0,30,0} };
+static constexpr SeqStep SQS_DP5[]  PROGMEM = { {0,40,0},{300,40,0},{0,30,0},{600,40,0},{300,40,5000},{0,30,0} };
+static constexpr SeqStep SQS_SLOW[] PROGMEM = {  // 0→60 後每 10 秒降 1% 至 30，停 40 秒→0（440 秒）
+  {0,40,0},{600,40,0},
+  {590,10,0},{580,10,0},{570,10,0},{560,10,0},{550,10,0},{540,10,0},{530,10,0},{520,10,0},
+  {510,10,0},{500,10,0},{490,10,0},{480,10,0},{470,10,0},{460,10,0},{450,10,0},{440,10,0},
+  {430,10,0},{420,10,0},{410,10,0},{400,10,0},{390,10,0},{380,10,0},{370,10,0},{360,10,0},
+  {350,10,0},{340,10,0},{330,10,0},{320,10,0},{310,10,0},
+  {300,40,0},{0,30,0} };
+static constexpr SeqStep SQS_ZDWL[] PROGMEM = {  // 純 0→30→0 停 10/30/120 秒再上 30（390 秒）
+  {0,40,0},{300,40,0},{0,10,0},{300,40,0},{0,30,0},{300,40,0},{0,120,0},{300,40,0},{0,30,0} };
 
 struct SeqDef { const char *name; const SeqStep *steps; uint8_t n; };
 static const char SN1[]  PROGMEM = "REST5";  static const char SN2[]  PROGMEM = "HOLD5";
@@ -328,14 +353,72 @@ static const char SN9[]  PROGMEM = "DN100";  static const char SN10[] PROGMEM = 
 static const char SN11[] PROGMEM = "DN60";   static const char SN12[] PROGMEM = "DN40";
 static const char SN13[] PROGMEM = "DIP.5";  static const char SN14[] PROGMEM = "DIP1";
 static const char SN15[] PROGMEM = "DIP2";   static const char SN16[] PROGMEM = "DIP5";
+static const char SN17[] PROGMEM = "SLOWDN"; static const char SN18[] PROGMEM = "ZDWELL";
 #define SQN(a) (uint8_t)(sizeof(a) / sizeof(a[0]))
 #define SQ(n, a) { n, a, SQN(a) }
-static const SeqDef SEQS[] PROGMEM = {
+static constexpr SeqDef SEQS[] PROGMEM = {
   SQ(SN1, SQS_REST), SQ(SN2, SQS_HOLD), SQ(SN3, SQS_PTHA), SQ(SN4, SQS_PTHB),
   SQ(SN5, SQS_REVA), SQ(SN6, SQS_REVB), SQ(SN7, SQS_UP),   SQ(SN8, SQS_UPHI),
   SQ(SN9, SQS_D100), SQ(SN10, SQS_D80), SQ(SN11, SQS_D60), SQ(SN12, SQS_D40),
-  SQ(SN13, SQS_DP05), SQ(SN14, SQS_DP1), SQ(SN15, SQS_DP2), SQ(SN16, SQS_DP5) };
+  SQ(SN13, SQS_DP05), SQ(SN14, SQS_DP1), SQ(SN15, SQS_DP2), SQ(SN16, SQS_DP5),
+  SQ(SN17, SQS_SLOW), SQ(SN18, SQS_ZDWL) };
 #define SEQ_N SQN(SEQS)
+
+/* ==================== 串接計畫（0.11M） ====================
+   一個計畫 = 幾個 SEQ 依序跑，段與段之間插一段休息（REST5 同一個序列：阻力 0、下控持續 RUNNING），
+   最後一段後面不休息，直接 PLAN DONE → 保證歸零（SET 0 → STOP），跟 SEQ DONE 走同一條路。
+   每一段、每一段休息都是功率機設定頁的「一組」，所以組數 = 2 × 段數 − 1。
+
+   時間軸（秒，從操作員按下 * 開始計畫、同時在功率機按第一下 F1 那一刻算起）：
+     第 k 組的 Mega 長度   M_k = 該 SEQ 各步秒數總和（休息組 = REST5 = 300）
+     功率機設定頁組長      G_k = M_k + PLAN_MARGIN_S，進位到 10 秒
+     第 k 組開始（送 F1）  T_k = Σ_{j<k} (G_j + PLAN_GAP_S)
+   Mega 在 T_k 才開始第 k 組（絕對排程，不會越跑越偏）；內容跑完到 T_{k+1} 之間停在阻力 0 等待（HOLD）。
+   功率機在 T_k + G_k 就停錄這一組，所以內容（含 0.10M 斷線暫停延長）拖到 T_k + G_k − PLAN_LATE_GUARD_MS 還沒跑完
+   → PLAN ABORT: LATE ＋ 保證歸零（最後一組也一樣），不讓內容被靜默截斷或跟功率機錯組。
+   對齊：操作員「先按功率機 F1，3 秒內再按 *」；planT0 取在按 * 那一刻，比 F1 晚 ≤3 s，從 30 s 餘裕扣。
+   dyno_f1timer/gen_plans.py 直接解析本檔這些表與常數產生 plans.json，不要手抄到別處。 */
+#define PLAN_REST_SEQ       1    // 休息用哪個 SEQ（1 = REST5，{0,300}）
+#define PLAN_MARGIN_S      30    // 組長餘裕：F1 對時誤差 + 0.10M 斷線暫停計時的累積（見 DYNO_GROUP_TABLE_0.11M.md）
+#define PLAN_GAP_S          5    // 功率機上一組錄完到下一次 F1 的間隔（REVIEW.md H1）
+#define PLAN_LATE_GUARD_MS 6000  // 內容必須在功率機這組停錄前至少這麼久跑完：* 比 F1 晚 ≤3 s ＋ F1 延遲 ＋ 時鐘漂移（REVIEW_2_claude M2）
+#define PLAN_MAX_GROUPS    20    // 功率機設定頁最多 20 組
+#define DYNO_GROUP_MAX_S  600    // 功率機每組上限 600 秒
+
+struct PlanDef { const char *name; const uint8_t *segs; uint8_t n; };
+/* 段 = SEQ 編號（1 起算，跟畫面上 SEQn 一樣） */
+static constexpr uint8_t PLS_60A[]  PROGMEM = { 18, 7, 8, 9, 10, 11 };      // ZDWELL, UP0-70, UP80+, DN100, DN80, DN60
+static constexpr uint8_t PLS_60B[]  PROGMEM = { 12, 13, 14, 15, 16 };       // DN40, DIP.5, DIP1, DIP2, DIP5
+static constexpr uint8_t PLS_COMP[] PROGMEM = { 7, 8, 9, 10, 11, 12 };      // UP0-70, UP80+, DN100, DN80, DN60, DN40
+static const char PN1[] PROGMEM = "60A"; static const char PN2[] PROGMEM = "60B";
+static const char PN3[] PROGMEM = "COMP";
+static constexpr PlanDef PLANS[] PROGMEM = {
+  { PN1, PLS_60A, SQN(PLS_60A) }, { PN2, PLS_60B, SQN(PLS_60B) }, { PN3, PLS_COMP, SQN(PLS_COMP) } };
+#define PLAN_N SQN(PLANS)
+
+/* ---- 編譯期檢查：只在編譯時讀表（執行時 PROGMEM 一律走 pgm_read） ---- */
+/* 包在 struct 裡：Arduino 會把自由函式的原型搬到檔案最前面（那時 SeqStep 還沒宣告） */
+struct Cx {
+  static constexpr uint32_t cxStepsSum(const SeqStep *p, uint8_t n) {
+  return n ? (uint32_t)p[n - 1].holdS + cxStepsSum(p, (uint8_t)(n - 1)) : 0; }
+  static constexpr uint32_t cxSeqS(uint8_t no) { return cxStepsSum(SEQS[no - 1].steps, SEQS[no - 1].n); }
+  static constexpr uint8_t  cxGroups(uint8_t n) { return n ? (uint8_t)(2 * n - 1) : 0; }
+  static constexpr uint32_t cxDynoS(uint32_t megaS) { return (megaS + PLAN_MARGIN_S + 9) / 10 * 10; }
+  static constexpr bool cxSegsOk(const uint8_t *g, uint8_t n) {
+  return n == 0 || (g[n - 1] >= 2 && g[n - 1] <= SEQ_N && cxDynoS(cxSeqS(g[n - 1])) <= DYNO_GROUP_MAX_S &&
+                      cxSegsOk(g, (uint8_t)(n - 1))); }
+  static constexpr bool cxPlansOk(uint8_t i) {
+  return i == 0 || (PLANS[i - 1].n >= 1 && cxGroups(PLANS[i - 1].n) <= PLAN_MAX_GROUPS &&
+                      cxSegsOk(PLANS[i - 1].segs, PLANS[i - 1].n) && cxPlansOk((uint8_t)(i - 1))); }
+};
+static_assert(Cx::cxSeqS(PLAN_REST_SEQ) == 300, "休息段必須是 REST5（300 s）");
+static_assert(Cx::cxDynoS(Cx::cxSeqS(PLAN_REST_SEQ)) <= DYNO_GROUP_MAX_S, "休息組超過功率機每組上限");
+static_assert(Cx::cxPlansOk(PLAN_N), "計畫超過 20 組、某組超過 600 s，或段不是 SEQ2～SEQ_N");
+static_assert(SEQ_N + PLAN_N < 255, "選單索引溢位");
+static_assert(PLAN_MARGIN_S * 1000UL > PLAN_LATE_GUARD_MS + 3000UL + 1000UL + 5000UL,
+              "餘裕要大於 LATE 保護 + F1/* 對時 3 s + arm 1 s + 至少 5 s 斷線暫停");
+/* LATE 保護的預算：狀態檔延遲 / F1 延遲 ~2 s ＋ 第 1 組 * 3 s ＋ 組內漂移 ≤1.3 s ≈ 6 s；太大會白白吃掉斷線容許（REVIEW_4 R4-L6） */
+static_assert(PLAN_LATE_GUARD_MS >= 6000UL && PLAN_LATE_GUARD_MS <= 8000UL, "PLAN_LATE_GUARD_MS 應在 6000～8000");
 
 static bool     uiSeq      = false;   // 畫面在 SEQ 模式（協定上仍是 MODE_DUTY）
 static uint8_t  seqSel     = 0;       // 選中的序列（0 起算）
@@ -344,6 +427,14 @@ static bool     seqStarted = false;   // 下控確認 RUNNING 之後才開始計
 static uint8_t  seqIdx     = 0;
 static uint32_t seqStepT0  = 0;
 static uint32_t seqNotRun  = 0;       // 開始後下控不在 RUNNING 的起點，超過 3 秒就中止
+static uint8_t  uiSel      = 0;       // 0.11M：SEQ 畫面選單（0..SEQ_N-1 = 單一序列，之後 = 計畫）
+static bool     planActive = false;   // 0.11M：計畫執行中（seqActive 也會是 true）
+static uint8_t  planId     = 0;       // 1 起算，0 = 沒有計畫（遙測用）
+static uint8_t  planGrp    = 0;       // 目前第幾組（0 起算）
+static bool     planHold   = false;   // 這組內容跑完，阻力 0 等下一組
+static uint32_t planT0     = 0;       // 計畫開始（= 功率機第一下 F1）
+static uint32_t planNextAt = 0;       // 下一組開始的 millis（相對 planT0 的絕對排程）
+static uint32_t planLateAt = 0;       // 這組內容最晚要跑完的 millis（功率機停錄 − PLAN_LATE_GUARD_MS）
 
 /* 參數用 void*：Arduino 會把函式原型自動插到檔案最前面，那時 SeqStep 還沒宣告 */
 static void seqStepRead(uint8_t i, void *s) {
@@ -351,6 +442,41 @@ static void seqStepRead(uint8_t i, void *s) {
   memcpy_P(s, &p[i], sizeof(SeqStep));
 }
 static uint8_t seqLen() { return pgm_read_byte(&SEQS[seqSel].n); }
+
+/* ---- 0.11M 計畫：執行期讀 PROGMEM（公式與上面編譯期檢查相同） ---- */
+static uint16_t seqTotalS(uint8_t idx0) {
+  const SeqStep *p = (const SeqStep *)pgm_read_ptr(&SEQS[idx0].steps);
+  uint8_t n = pgm_read_byte(&SEQS[idx0].n);
+  uint16_t t = 0;
+  for (uint8_t i = 0; i < n; i++) t += pgm_read_word(&p[i].holdS);
+  return t;
+}
+static uint8_t planSegs() { return pgm_read_byte(&PLANS[planId - 1].n); }
+static uint8_t planGroups() { return (uint8_t)(2 * planSegs() - 1); }
+static bool    planIsRest(uint8_t g) { return g & 1; }
+static uint8_t planSeqIdx(uint8_t g) {         // 第 g 組用哪個 SEQ（0 起算）
+  if (planIsRest(g)) return PLAN_REST_SEQ - 1;
+  const uint8_t *p = (const uint8_t *)pgm_read_ptr(&PLANS[planId - 1].segs);
+  return (uint8_t)(pgm_read_byte(&p[g / 2]) - 1);
+}
+static uint32_t planDynoS(uint8_t g) {         // G_g：功率機這組的組長（秒）
+  return (uint32_t)(seqTotalS(planSeqIdx(g)) + PLAN_MARGIN_S + 9) / 10 * 10;
+}
+static uint32_t planGroupStartS(uint8_t g) {   // T_g：第 g 組開始（秒，從 planT0 起算）
+  uint32_t t = 0;
+  for (uint8_t j = 0; j < g; j++) t += planDynoS(j) + PLAN_GAP_S;
+  return t;
+}
+/* 第 g 組的兩個時刻：下一組開始（最後一組 = 0 不用）、內容最晚完成（LATE 門檻） */
+static void planSetGroupTimes(uint8_t g) {
+  uint32_t tg = planGroupStartS(g);
+  planNextAt = (g + 1 < planGroups()) ? planT0 + (tg + planDynoS(g) + PLAN_GAP_S) * 1000UL : 0;
+  planLateAt = planT0 + (tg + planDynoS(g)) * 1000UL - PLAN_LATE_GUARD_MS;
+}
+/* 內容（不是 HOLD）到了 LATE 門檻還沒跑完 */
+static bool planLate(uint32_t now) {
+  return planActive && !planHold && (int32_t)(now - planLateAt) >= 0;
+}
 
 static bool     tgtDirty = false;
 static uint32_t tgtDirtyAt = 0;
@@ -450,7 +576,7 @@ static void sendAwait(uint8_t cmd, const uint8_t *data, uint8_t n) {
 }
 
 static void sendSetControl(uint16_t t) {
-  lastSent = t;
+  pendVal = t;                    // lastSent 等 ACK OK 才更新（onAck）
   uint8_t d[3] = { mode, (uint8_t)(t & 0xFF), (uint8_t)(t >> 8) };
   sendAwait(CMD_SET_CONTROL, d, 3);
 }
@@ -458,6 +584,7 @@ static void sendSetControl(uint16_t t) {
 /* ==================== 序列 ==================== */
 static void seqArm() {
   if (seq != SQ_NONE) { setMsgP(M_BUSY); return; }
+  zeroPending = false;            // 使用者明確要 arm，取消尚未完成的保證歸零
   sendSetControl(target);
   seq = SQ_ARM_SET;
 }
@@ -469,10 +596,18 @@ static void seqStop() {
   /* 心跳刻意不停 —— 停了 30 秒後下控會直接斷電 */
 }
 
-static void seqSafeZero() {
-  if (seq != SQ_NONE) { setMsgP(M_BUSY); return; }
-  sendSetControl(0);
-  seq = SQ_ZERO_SET;
+/* 0.9M：不再在忙碌時直接放棄，改成排進「保證歸零」，由主迴圈送到成功為止 */
+static void seqSafeZero(PGM_P why = NULL) {
+  if (why || !zeroPending) zeroWhy = why;                 // 歸零進行中再按長 #：保留原本的原因
+  zeroPending = true; zeroTries = 0; zeroAt = millis() - ZERO_RETRY_MS;
+}
+
+/* 0.10M：保證歸零結束，原因訊息保留在前面（例如 "SEQ DONE +ZERO"） */
+static void zeroFinish(PGM_P res) {
+  zeroPending = false;
+  if (zeroWhy) setMsgF(PSTR("%S %S"), zeroWhy, res);
+  else         setMsgP(res);
+  zeroWhy = NULL;
 }
 
 static void seqResetError() {
@@ -505,6 +640,11 @@ static void onAck(uint8_t cmd, uint8_t result) {
     return;
   }
   pendCmd = 0;
+  if (cmd == CMD_SET_CONTROL && result == 0) lastSent = pendVal;   // 0.9M：下控確認了才算送到
+
+  /* 0.10M：保證歸零中 SET 0 回 NG 也照樣送 STOP；STOP 回 BAD_STATE 表示下控本來就沒在跑，歸零結束 */
+  if (result != 0 && seq == SQ_ZERO_SET) { sendAwait(CMD_STOP, NULL, 0); seq = SQ_ZERO_STOP; return; }
+  if (result == 5 && seq == SQ_ZERO_STOP) { seq = SQ_NONE; zeroFinish(PSTR("+STOP")); return; }
 
   if (result != 0) {
     char cn[8], rn[10];
@@ -528,7 +668,7 @@ static void onAck(uint8_t cmd, uint8_t result) {
     case SQ_DIP:        seq = SQ_NONE; dipT0 = millis();   break;
     case SQ_STOP:       seq = SQ_NONE; setMsgP(M_STOPPED); break;
     case SQ_ZERO_SET:   sendAwait(CMD_STOP, NULL, 0); seq = SQ_ZERO_STOP; break;
-    case SQ_ZERO_STOP:  seq = SQ_NONE; setMsgP(M_ZERO);    break;
+    case SQ_ZERO_STOP:  seq = SQ_NONE; zeroFinish(zeroWhy ? PSTR("+ZERO") : M_ZERO); break;
     /* 清錯誤時把 RPM 統計一起歸零，才知道「清完之後」又飄了多少 */
     case SQ_RESET:      seq = SQ_NONE; faulted = false; rpmStatsReset(); setMsgP(M_CLR); break;
     default:            seq = SQ_NONE;                     break;
@@ -766,48 +906,114 @@ static void seqApply(uint8_t i, uint32_t now) {
           (unsigned)seqLen(), (unsigned)(s.duty / 10), (unsigned)(s.duty % 10));
 }
 
+static uint32_t seqLinkDownAt = 0;   // 0.10M：序列中鏈路斷掉的時刻，0 = 沒斷
 static void seqAbort(PGM_P why) {
   if (!seqActive) return;
   seqActive = false;
+  if (planActive) { uiSel = 0; seqSel = 0; }              // 0.11M：計畫結束後選單回 SEQ1，誤按 * 不會重跑計畫
+  planActive = false; planHold = false;                    // 0.11M：任何中止 / 結束都結束計畫
+  seqLinkDownAt = 0;                                       // 0.10M：斷線暫停的時刻不要帶到下一個序列
+  tgtDirty = false; dipPhase = 0;                          // 0.9M：序列殘留的推送 / 歸零不要再送出
   setMsgP(why);
 }
 
 static const char M_SQDONE[]  PROGMEM = "SEQ DONE";
 static const char M_SQABORT[] PROGMEM = "SEQ ABORTED";
 static const char M_SQNORUN[] PROGMEM = "SEQ STOP: NOT RUN";
+static const char M_SQLINK[]  PROGMEM = "SEQ ABORT: LINK";
+static const char M_PLDONE[]  PROGMEM = "PLAN DONE";
+static const char M_BOOT[]    PROGMEM = "BOOT FW " FW_VERSION;   // 0.11M：開機事件（E 行）
+static const char M_BOOTZ[]   PROGMEM = "BOOT ZERO";
+static const char M_PLLATE[]  PROGMEM = "PLAN ABORT: LATE";
+
+/* 0.11M：第 g 組開始（下控已在 RUNNING；休息組 = REST5 同一個序列，阻力 0） */
+static void planGroupStart(uint8_t g, uint32_t now) {
+  planGrp = g; planHold = false;
+  seqSel = planSeqIdx(g);
+  planSetGroupTimes(g);
+  seqApply(0, now);
+  char nm[6]; copyP(nm, sizeof(nm), (PGM_P)pgm_read_ptr(&PLANS[planId - 1].name));
+  setMsgF(PSTR("P%s G%u/%u %s"), nm, (unsigned)(g + 1), (unsigned)planGroups(),
+          planIsRest(g) ? "REST" : "TEST");
+}
 
 static void seqStart() {
   seqActive = true; seqStarted = false; seqNotRun = 0;
+  /* 0.10M：保證歸零進行中不准開新序列（由呼叫端擋，見 loop） */
   dipAuto = false; dipPhase = 0;                         // 手動的自動歸零會干擾序列，關掉
   SeqStep s; seqStepRead(0, &s);
   target = s.duty;
-  if (confirmedRunning()) { seqStarted = true; seqApply(0, millis()); }
+  if (confirmedRunning()) { seqStarted = true; if (planActive) planGroupStart(0, millis()); else seqApply(0, millis()); }
   else seqArm();                                          // 送 SET_CONTROL(第一步) → START
+}
+
+/* 0.11M：開始計畫 p（1 起算）。按下 * 的這一刻 = T0，操作員同時在功率機按第一下 F1 */
+static void planStart(uint8_t p) {
+  planId = p; planT0 = millis();
+  planGrp = 0; planHold = false;
+  seqSel = planSeqIdx(0);
+  planSetGroupTimes(0);
+  planActive = true;
+  seqStart();                                              // 已在 RUNNING 就直接進第 1 組，否則 arm 後由 seqTick 進
 }
 
 static void seqTick(uint32_t now) {
   if (!seqActive) return;
-  if (!linkAlive) return;                                 // LINK LOST 一下就回來，不中止也不前進
+  if (!linkAlive) {
+    /* LINK LOST 一下就回來（下控每 ~6.5 秒一次、約 1.1 秒）：不中止也不前進。
+       0.9M：連續斷超過 SEQ_LINK_ABORT_MS 就中止並排保證歸零，不再停在當下 duty。 */
+    if (!seqLinkDownAt) seqLinkDownAt = now;              // 0.10M：從判定斷線那一刻起暫停這一步的計時
+    if ((int32_t)(now - lastRxAt) > (int32_t)SEQ_LINK_ABORT_MS) {
+      seqLinkDownAt = 0;
+      seqAbort(M_SQLINK); target = 0; seqSafeZero(M_SQLINK);
+    }
+    return;
+  }
+  if (seqLinkDownAt) { seqStepT0 += now - seqLinkDownAt; seqLinkDownAt = 0; }   // 鏈路回來：補回暫停的時間
   if (!confirmedRunning()) {
     if (!seqNotRun) seqNotRun = now;
     if (now - seqNotRun > 3000 && seq == SQ_NONE) seqAbort(M_SQNORUN);
     return;
   }
   seqNotRun = 0;
-  if (!seqStarted) { seqStarted = true; seqApply(0, now); return; }
+  if (!seqStarted) { seqStarted = true; if (planActive) planGroupStart(0, now); else seqApply(0, now); return; }
 
   /* 推送途中剛好碰到 LINK LOST 時，推送邏輯會把 tgtDirty 清掉、值就沒送出去。
      序列跑的時候自己盯著：最後送出的值不是 target 就再推一次。 */
-  if (!dipPhase && !tgtDirty && lastSent != target && seq == SQ_NONE && !pendCmd) {
+  /* 0.9M：lastSent 只在 ACK OK 才更新，下控回 NG 時這裡會一直成立 —— 補送間隔至少 1 秒，免得洗爆 UART */
+  static uint32_t seqResendAt = 0;
+  if (!dipPhase && !tgtDirty && lastSent != target && seq == SQ_NONE && !pendCmd && !zeroPending &&
+      (now - seqResendAt) >= 1000) {
+    seqResendAt = now;
     tgtDirty = true; tgtDirtyAt = now - TGT_PUSH_MS;
+  }
+
+  /* 0.11M：計畫中這組內容已跑完 → 阻力 0 等到下一組的絕對時刻 */
+  bool lastGrp = planActive && (planGrp + 1 >= planGroups());
+  if (planActive && planHold) {
+    if (!lastGrp && (int32_t)(now - planNextAt) >= 0) planGroupStart((uint8_t)(planGrp + 1), now);
+    return;
   }
 
   SeqStep s; seqStepRead(seqIdx, &s);
   /* 有號比較：seqStepT0 可能是在這一圈 now 之後才取的 millis()（例如 seqStart 裡），
      無號相減會變成超大值、立刻跳下一步 —— 10/12 D 輪 SQ3 第 1 步只停了 21 ms 就是這個 */
   if ((int32_t)(now - seqStepT0) >= (int32_t)((uint32_t)s.holdS * 1000UL)) {
-    if (seqIdx + 1 >= seqLen()) { seqAbort(M_SQDONE); return; }  // 最後一步是 duty 0，停在那裡不 STOP
+    if (seqIdx + 1 >= seqLen()) {
+      if (planActive && !lastGrp) {                         // 0.11M：計畫中、不是最後一組 → HOLD 阻力 0
+        planHold = true;
+        target = 0; tgtDirty = true; tgtDirtyAt = now - TGT_PUSH_MS; tgtRetry = 0;
+        return;
+      }
+      /* 0.9M：SEQ DONE 後自動 SET_CONTROL(0) → STOP（保證歸零，送到 ACK 為止）；0.11M 計畫最後一組同一條路 */
+      PGM_P why = planActive ? M_PLDONE : M_SQDONE;
+      seqAbort(why); target = 0; seqSafeZero(why); return;
+    }
     seqApply((uint8_t)(seqIdx + 1), now);
+  }
+  /* 0.11M：內容（含斷線暫停延長）拖到功率機這組停錄前 2 s 還沒跑完 → 中止並歸零（最後一組也檢查） */
+  if (planLate(now)) {
+    seqAbort(M_PLLATE); target = 0; seqSafeZero(M_PLLATE);
   }
 }
 
@@ -860,10 +1066,18 @@ static void render() {
 
   /* 本機設定值與下控實際採用的目標值不同時標 * —— 看得出設定有沒有真的送進去 */
   bool unsent = sr.valid && (sr.tgt != target);
-  if (uiSeq && !seqActive) {
+  if (uiSeq && !seqActive && uiSel >= SEQ_N) {           // 0.11M：選單上的計畫
+    char nm[8]; uint8_t pi = (uint8_t)(uiSel - SEQ_N);
+    copyP(nm, sizeof(nm), (PGM_P)pgm_read_ptr(&PLANS[pi].name));
+    snprintf_P(L[0], sizeof(L[0]), PSTR("PLAN %-4s %uG"), nm,
+               (unsigned)(2 * pgm_read_byte(&PLANS[pi].n) - 1));
+  } else if (uiSeq && !seqActive) {
     char nm[8];
     copyP(nm, sizeof(nm), (PGM_P)pgm_read_ptr(&SEQS[seqSel].name));
     snprintf_P(L[0], sizeof(L[0]), PSTR("SEQ%u %-6s"), (unsigned)(seqSel + 1), nm);
+  } else if (uiSeq && planActive) {
+    snprintf_P(L[0], sizeof(L[0]), PSTR("G%u/%u %-6s%c"), (unsigned)(planGrp + 1), (unsigned)planGroups(),
+               t, unsent ? '*' : ' ');                    // 不顯示 S%u，免得壓到右上徽章
   } else if (uiSeq) {
     snprintf_P(L[0], sizeof(L[0]), PSTR("S%u %-7s%c"), (unsigned)(seqSel + 1), t, unsent ? '*' : ' ');
   } else
@@ -888,6 +1102,10 @@ static void render() {
       snprintf_P(L[3], sizeof(L[3]), PSTR("VIN %u.%02uV E%04X"),
                  (unsigned)(vinMv / 1000), (unsigned)((vinMv % 1000) / 10), (unsigned)sr.err);
     /* 序列執行中：第 4 行改顯示進度與這一步剩幾秒 */
+    else if (planActive && planHold) {                  // 0.11M：等下一組
+      int32_t left = (int32_t)(planNextAt - millis()) / 1000;
+      snprintf_P(L[3], sizeof(L[3]), PSTR("HOLD NEXT G %lds"), (long)(left < 0 ? 0 : left));
+    }
     else if (seqActive && seqStarted) {
       SeqStep s; seqStepRead(seqIdx, &s);
       uint32_t el = (millis() - seqStepT0) / 1000UL;
@@ -941,6 +1159,19 @@ static void telemetry() {
   Serial.print(sr.err);          Serial.print(',');
   Serial.print(linkAlive ? 1 : 0);  Serial.print(',');
   Serial.print(vinMv);
+  /* 0.11M 追加（舊的 13 欄不動）：plan,grp,seg,rest,hold,seq,step,sel
+     plan = 1 60A / 2 60B / 3 COMP / 0 沒有計畫；grp = 第幾組（1 起算）；seg = 第幾段量測（休息組 0）；
+     rest = 休息組；hold = 內容跑完、阻力 0 等下一組；seq / step = 正在跑的 SEQ 與步（沒跑 = 0） */
+  bool pa = planActive;
+  Serial.print(','); Serial.print(pa ? planId : 0);
+  Serial.print(','); Serial.print(pa ? planGrp + 1 : 0);
+  Serial.print(','); Serial.print((pa && !planIsRest(planGrp)) ? planGrp / 2 + 1 : 0);
+  Serial.print(','); Serial.print((pa && planIsRest(planGrp)) ? 1 : 0);
+  Serial.print(','); Serial.print((pa && planHold) ? 1 : 0);
+  Serial.print(','); Serial.print((seqActive && seqStarted) ? seqSel + 1 : 0);
+  Serial.print(','); Serial.print((seqActive && seqStarted && !planHold) ? seqIdx + 1 : 0);
+  /* sel = SEQ 畫面選單目前選中的計畫（1 起算，0 = 選的是單一 SEQ）：dyno_f1timer 開始前核對 --plan */
+  Serial.print(','); Serial.print(uiSel >= SEQ_N ? uiSel - SEQ_N + 1 : 0);
   Serial.println();
 }
 #endif
@@ -964,6 +1195,11 @@ void setup() {
      按 STOP 只是關阻力，此時若停掉心跳，30 秒後整台會斷電。 */
   sendCmd(CMD_HEARTBEAT, NULL, 0);
   lastHbAt = millis();
+
+  /* 0.11M：開機一定先走保證歸零（SET 0 → STOP，鏈路一通就送、送到 ACK 或確認已停）。
+     USB 重新連線（DTR）會讓 Mega 重開；下控沒逾時的話會停在重開前的 duty，這裡把它收掉。 */
+  setMsgP(M_BOOT);
+  seqSafeZero(M_BOOTZ);
 
   render();
 }
@@ -990,7 +1226,13 @@ void loop() {
        arm/stop 那幾個序列不在此列 —— 它們有使用者按鍵當重試。 */
     if (pendCmd == CMD_SET_CONTROL && seq == SQ_SET) {
       if (tgtRetry < TGT_SET_RETRY) { tgtRetry++; tgtDirty = true; tgtDirtyAt = now; }
-      else                            setMsgP(M_SETFAIL);
+      else                            setMsgP(M_SETFAIL);   // 序列中由 seqTick 的 lastSent != target 檢查繼續補送
+    }
+    /* 0.9M：保證歸零的 STOP 掉了：zeroPending 仍在，主迴圈過 ZERO_RETRY_MS 重來。
+       0.10M：SET 0 逾時就直接接著送 STOP（阻力至少先關掉），不等下一輪 */
+    if (pendCmd == CMD_SET_CONTROL && seq == SQ_ZERO_SET) {
+      sendAwait(CMD_STOP, NULL, 0); seq = SQ_ZERO_STOP;
+      goto ackTimeoutDone;
     }
     /* 歸零那一包掉了：補送；補不上就放棄歸零，直接送回原值 */
     if (pendCmd == CMD_SET_CONTROL && seq == SQ_DIP) {
@@ -1000,6 +1242,7 @@ void loop() {
     pendCmd = 0;
     seq     = SQ_NONE;
   }
+ackTimeoutDone:
 
   /* ---- 鏈路看門狗 ---- */
   if (linkAlive && lastRxAt && (now - lastRxAt) > LINK_TIMEOUT_MS) {
@@ -1023,8 +1266,10 @@ void loop() {
   if (uiSeq) {
     /* SEQ 畫面：↑↓ 選序列；跑的時候不准動，避免誤觸改掉 duty */
     if (!seqActive) {
-      if (evEdge[B_UP])   { seqSel = (uint8_t)((seqSel + 1) % SEQ_N); msg[0] = 0; }
-      if (evEdge[B_DOWN]) { seqSel = (uint8_t)((seqSel + SEQ_N - 1) % SEQ_N); msg[0] = 0; }
+      /* 0.11M：SEQ1..SEQ_N 之後接著是計畫 60A / 60B / COMP */
+      if (evEdge[B_UP])   { uiSel = (uint8_t)((uiSel + 1) % (SEQ_N + PLAN_N)); msg[0] = 0; }
+      if (evEdge[B_DOWN]) { uiSel = (uint8_t)((uiSel + SEQ_N + PLAN_N - 1) % (SEQ_N + PLAN_N)); msg[0] = 0; }
+      if (uiSel < SEQ_N) seqSel = uiSel;
     }
   } else {
     if (evEdge[B_UP])     bumpTarget(+1, 1);
@@ -1050,7 +1295,11 @@ void loop() {
     else         setMsgF(PSTR("AUTO DIP OFF"));
   }
   else if (uiSeq && evClick[B_START] && !faulted) {
-    if (!seqActive) seqStart();
+    if (zeroPending) setMsgP(M_BUSY);                    // 0.10M：保證歸零還沒完成，不准開新序列
+    else if (!seqActive) {
+      if (uiSel >= SEQ_N) planStart((uint8_t)(uiSel - SEQ_N + 1));   // 0.11M
+      else { planId = 0; seqStart(); }
+    }
   }
   else if (evLong[B_START]) cycleMode();
   else if (evClick[B_START]) {
@@ -1062,20 +1311,47 @@ void loop() {
     else                        seqArm();
   }
 
-  if (evLong[B_STOP])       { seqAbort(M_SQABORT); seqSafeZero(); }
-  else if (evClick[B_STOP]) { seqAbort(M_SQABORT); seqStop(); }
+  if (evLong[B_STOP])       { bool a = seqActive; seqAbort(M_SQABORT); if (a) target = 0; seqSafeZero(a ? M_SQABORT : NULL); }
+  else if (evClick[B_STOP]) {
+    /* 0.10M：序列中短按 # 也走保證歸零（SET 0 → STOP），不只送 STOP */
+    if (seqActive) { seqAbort(M_SQABORT); target = 0; seqSafeZero(M_SQABORT); }
+    else seqStop();
+  }
 
   seqTick(now);
 
   /* ---- 目標值推送（節流） ----
      DUTY 模式按鍵還按著就先不送：調整途中的值只顯示在 OLED，放開才送最後那個值。
      否則從 60 調到 30 的途中 50、40 都會真的送出去，量磁滯時會被這些中間值污染。 */
-  bool dutyHeld = (mode == MODE_DUTY) && (bs[B_UP].down || bs[B_DOWN].down);
+  /* 0.9M：序列跑著時按鍵不改 duty，所以按住也不能擋序列自己的推送 */
+  bool dutyHeld = !seqActive && (mode == MODE_DUTY) && (bs[B_UP].down || bs[B_DOWN].down);
+
+  /* ---- 保證歸零（0.9M）：SET_CONTROL(0) → STOP，直到兩個都 ACK OK ---- */
+  /* 0.10M：下控 STATUS 確認已不在 RUNNING（至少試過一次後）就結束重試迴圈 */
+  if (zeroPending && zeroTries && linkAlive && sr.valid && !(sr.flags & 0x02) &&
+      seq == SQ_NONE && !pendCmd) {
+    zeroFinish(PSTR("+IDLE"));
+  }
+  /* 0.10M：只有 RX 斷（收不到 STATUS）但 TX 可能還通：每秒盲送一次 STOP（不等 ACK） */
+  if (zeroPending && !linkAlive && (now - blindStopAt) >= ZERO_RETRY_MS) {
+    blindStopAt = now;
+    sendCmd(CMD_STOP, NULL, 0);
+  }
+  if (zeroPending && linkAlive && seq == SQ_NONE && !pendCmd &&
+      (now - zeroAt) >= ZERO_RETRY_MS) {
+    zeroAt = now; dipPhase = 0; tgtDirty = false;
+    if (zeroTries++) {
+      if (zeroWhy) setMsgF(PSTR("%S R%u"), zeroWhy, (unsigned)zeroTries);
+      else         setMsgF(PSTR("ZERO RETRY %u"), (unsigned)zeroTries);
+    }
+    sendSetControl(0);
+    seq = SQ_ZERO_SET;
+  }
 
   /* ---- 短暫歸零 ---- 歸零期間擋住一般推送，時間到才把 target 送回去 */
   if (dipPhase && !confirmedRunning()) dipPhase = 0;      // 停了就不用回復
   if (dipPhase == 1 && seq == SQ_NONE && !pendCmd) {
-    sendSetControl(0);                                    // lastSent 跟著變 0，送回時就不會再觸發歸零
+    sendSetControl(0);                                    // ACK 後 lastSent 變 0，送回時就不會再觸發歸零
     seq = SQ_DIP; dipPhase = 2; dipT0 = now;              // ACK 回來時 dipT0 會再校正
   } else if (dipPhase == 2 && seq == SQ_NONE && !pendCmd &&
              (int32_t)(now - dipT0) >= (int32_t)dipLenMs) {
@@ -1085,7 +1361,7 @@ void loop() {
     setMsgF(PSTR("DIP END, TO %u.%u%%"), target / 10, target % 10);
   }
 
-  if (tgtDirty && !dipPhase) {
+  if (tgtDirty && !dipPhase && !zeroPending) {
     if (!confirmedRunning()) {
       tgtDirty = false;             // 沒在跑就只改本地設定值，按 START 時才一起送出
     } else if (!dutyHeld && seq == SQ_NONE && !pendCmd && (now - tgtDirtyAt) >= TGT_PUSH_MS) {

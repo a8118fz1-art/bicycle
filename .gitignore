@@ -14,3 +14,8 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# dyno_f1timer：離線安裝用的 wheel（約 14 MB，放在 Downloads\dyno_f1timer_v2.zip）與執行紀錄
+tools/dyno_f1timer/pywinauto_offline/*.whl
+tools/dyno_f1timer/f1timer.log
+__pycache__/

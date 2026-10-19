@@ -87,6 +87,13 @@
     </div>
     <p class="note">不標也可以 —— 事後會依轉速平台自動切段。標記只是幫忙對照。</p>
 
+    <h2 style="margin-top:18px">2b · 狀態檔（dyno_f1timer 用）</h2>
+    <div class="row">
+      <button id="btnStatus">選擇狀態檔 mega_status.json</button>
+    </div>
+    <div class="stats" id="statusInfo">尚未選擇。用 dyno_f1timer 跑計畫時必選（存到 config.toml 的 status_file 位置）。</div>
+    <div id="statusErr"></div>
+
     <h2 style="margin-top:18px">3 · 存檔</h2>
     <div class="row">
       <button class="primary" id="btnSave" disabled>下載 CSV</button>
@@ -138,7 +145,10 @@ let lastStatusAt = 0;
 let saveTimer = null;
 
 const HEADER = 'pc_time,pc_epoch_ms,type,nano_ms,flywheel_rpm,cadence,pwr_w,current_ma,'
-             + 'duty_pct,tgt_reported,target_local,mode,flags,err,link,vin_v,note';
+             + 'duty_pct,tgt_reported,target_local,mode,flags,err,link,vin_v,note,'
+             + 'plan,grp,seg,rest,hold,seq,step,sel';   // FW 0.11M 起追加（舊 FW 這 8 欄留空）
+const PLAN_NAME = ['', '60A', '60B', 'COMP'];
+const NO_PLAN = ['', '', '', '', '', '', '', ''];
 
 function log(s) {
   const el = $('log');
@@ -165,17 +175,25 @@ function handleLine(line) {
   if (p[0] === 'S' && p.length >= 13) {
     const [, ms, rpm, watt, ma, dx10, tgt, target, mode, flags, err, link, vinMv] = p.map(Number);
     const cad = rpm / RATIO;
+    /* FW 0.11M：第 14～20 欄 plan,grp,seg,rest,hold,seq,step；plan 存名字（60A/60B/COMP），0 = 空白 */
+    const pl = p.length >= 20
+      ? [PLAN_NAME[Number(p[13])] ?? p[13], ...p.slice(14, 20).map(x => x.trim()),
+         p.length >= 21 ? (PLAN_NAME[Number(p[20])] ?? p[20]) : '']
+      : NO_PLAN;
+    statusOnS(p);
+    statusKick();
     push(['S', ms, rpm, cad.toFixed(2), watt, ma, (dx10/10).toFixed(1), tgt, target,
-          MODE_NAME[mode] ?? mode, flags, err, link, (vinMv/1000).toFixed(2), '']);
+          MODE_NAME[mode] ?? mode, flags, err, link, (vinMv/1000).toFixed(2), '', ...pl]);
     paint({ rpm, cad, watt, ma, dx10, tgt, mode, link });
     heatAdd(watt);
     lastStatusAt = Date.now();
   } else if (p[0] === 'E' && p.length >= 3) {
     const msg = p.slice(2).join(',');
-    push(['E', p[1], '', '', '', '', '', '', '', '', '', '', '', '', csvText(msg)]);
+    push(['E', p[1], '', '', '', '', '', '', '', '', '', '', '', '', csvText(msg), ...NO_PLAN]);
+    statusOnE(Number(p[1]), msg);
     log('手把：' + msg);
   } else if (p[0] === 'R' && p.length >= 3) {
-    push(['R', p[1], p[2], (Number(p[2])/RATIO).toFixed(2), '', '', '', '', '', '', '', '', '', '', '']);
+    push(['R', p[1], p[2], (Number(p[2])/RATIO).toFixed(2), '', '', '', '', '', '', '', '', '', '', '', ...NO_PLAN]);
   }
   /* 其他（開機雜訊、半行）直接略過 */
 }
@@ -312,10 +330,92 @@ setInterval(() => {
 
 $('btnOpen').onclick = openPort;
 $('btnClose').onclick = closePort;
+/* ==================== 0.11M：mega_status.json（給 dyno_f1timer） ====================
+   File System Access API（Chrome / Edge）：使用者按一次選檔，之後每 1 s 覆寫一次。
+   createWritable() 寫到暫存檔、close() 才原子取代，f1timer 不會讀到半份 JSON。
+   寫入失敗：紅字顯示並繼續重試；f1timer 會因為檔案超過 3 s 沒更新而停止自動。 */
+const STATUS_MS = 1000;
+let statusHandle = null, statusBusy = false, statusTimer = null, statusLastAt = 0;
+/* REVIEW_4 R4-H1：分頁被遮住 / 最小化時 Chrome 會把 setInterval 節流到每分鐘一次。
+   改成收到 S 行（串口 I/O 推進，不受計時器節流）就寫，最多每秒一次；setInterval 只當備援。 */
+function statusKick() {
+  statusWatchdog();
+  if (statusHandle && !statusBusy && Date.now() - statusLastAt >= STATUS_MS) writeStatus();
+}
+const st = { s: null, sAtPc: 0, prevMs: null, backwards: 0, events: [], fw: '', boots: 0,
+             grpKey: '', grpSincePc: 0, writes: 0 };
+function statusOnS(p) {
+  const n = p.slice(1).map(Number);
+  const ms = n[0];
+  if (st.prevMs !== null && ms < st.prevMs) st.backwards++;          // millis 倒退 = Mega 重開
+  st.prevMs = ms;
+  st.s = { nano_ms: ms, link: n[10], ncols: p.length,
+           plan: p.length >= 20 ? n[12] : null, grp: p.length >= 20 ? n[13] : null,
+           seg: p.length >= 20 ? n[14] : null, rest: p.length >= 20 ? n[15] : null,
+           hold: p.length >= 20 ? n[16] : null, seq: p.length >= 20 ? n[17] : null,
+           step: p.length >= 20 ? n[18] : null, sel: p.length >= 21 ? n[19] : null };
+  st.sAtPc = Date.now();
+  const key = `${st.s.plan}/${st.s.grp}`;
+  if (key !== st.grpKey) { st.grpKey = key; st.grpSincePc = Date.now(); }
+}
+function statusOnE(ms, msg) {
+  st.events.push({ nano_ms: ms, pc_ms: Date.now(), msg });
+  if (st.events.length > 30) st.events.shift();
+  const m = /^BOOT FW (\S+)/.exec(msg);
+  if (m) { st.boots++; st.fw = m[1]; }
+  /* 換組事件（P60A G3/11 TEST）比 S 行早最多 0.5 s 到，用它當換組時刻 */
+  const g = /^P(\S+) G(\d+)\//.exec(msg);
+  if (g) { const id = PLAN_NAME.indexOf(g[1]); const key = `${id}/${g[2]}`;
+           if (key !== st.grpKey) { st.grpKey = key; st.grpSincePc = Date.now(); } }
+}
+function statusErr(t) {
+  $('statusErr').innerHTML = t ? `<p class="note" style="color:#c00;font-weight:bold">⚠ 狀態檔寫入失敗：${t}（dyno_f1timer 會停止自動）</p>` : '';
+}
+/* REVIEW_5 R5-L1：createWritable()/close() 永遠不回來時 statusBusy 會卡死 → 5 s 看門狗強制放開並顯示紅字。
+   用 statusGen 區分：被看門狗放棄的那次寫入之後才回來，也不會改到 statusBusy。 */
+const STATUS_WATCHDOG_MS = 5000;
+let statusGen = 0;
+function statusWatchdog() {
+  if (statusBusy && Date.now() - statusLastAt > STATUS_WATCHDOG_MS) {
+    statusGen++; statusBusy = false;
+    statusErr(`寫入超過 ${STATUS_WATCHDOG_MS / 1000} s 沒完成（檔案被鎖或安全檢查卡住），已放棄這次、繼續重試`);
+    log('狀態檔寫入逾時，看門狗放開');
+  }
+}
+async function writeStatus() {
+  statusWatchdog();
+  if (!statusHandle || statusBusy) return;
+  statusBusy = true; statusLastAt = Date.now();
+  const gen = statusGen;
+  try {
+    const body = JSON.stringify({ schema: 1, pc_epoch_ms: Date.now(), s_at_pc_ms: st.sAtPc,
+      fw: st.fw, boots: st.boots, millis_backwards: st.backwards, s: st.s,
+      grp_since_pc_ms: st.grpSincePc, events: st.events, writes: ++st.writes });
+    const w = await statusHandle.createWritable();
+    await w.write(body); await w.close();
+    if (gen === statusGen) {
+      statusErr('');
+      $('statusInfo').textContent = `寫入中：${statusHandle.name}　第 ${st.writes} 次　${fmtTime(new Date())}`;
+    }
+  } catch (e) {
+    statusErr(`${e.name}: ${e.message}`);
+    log('狀態檔寫入失敗：' + e.message);
+  } finally { if (gen === statusGen) statusBusy = false; }
+}
+$('btnStatus').onclick = async () => {
+  if (!('showSaveFilePicker' in window)) { statusErr('這個瀏覽器不支援 File System Access API，請用 Chrome 或 Edge'); return; }
+  try {
+    statusHandle = await window.showSaveFilePicker({ suggestedName: 'mega_status.json',
+      types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }] });
+    if (!statusTimer) statusTimer = setInterval(writeStatus, STATUS_MS);
+    writeStatus();
+  } catch (e) { if (e.name !== 'AbortError') statusErr(`${e.name}: ${e.message}`); }
+};
+
 $('btnMark').onclick = () => {
   const t = $('markText').value.trim();
   if (!t) return;
-  push(['M', '', '', '', '', '', '', '', '', '', '', '', '', '', csvText(t)]);
+  push(['M', '', '', '', '', '', '', '', '', '', '', '', '', '', csvText(t), ...NO_PLAN]);
   log('標記：' + t);
   $('markText').value = '';
 };
