@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""dyno_f1timer（配 Mega FW 0.11M 串接計畫 + 記錄頁 mega_status.json）
+"""dyno_f1timer（配 Mega FW 0.12M 串接計畫 + 記錄頁 mega_status.json）
 
 流程：記錄頁連上 Mega 並寫 mega_status.json → 本程式檢查（視窗、權限、狀態檔、Mega 選的計畫）→ ARMED →
 功率機只認 F1（每下 = 下一組，按滿 N 下自己停，組長不影響換組）。F2 = 第 1 組（穩定組）→ 穩定後操作員在
@@ -7,9 +7,9 @@
 在 Mega 每一組結束（= 下一組開始）前 3 s 送 1 下 F1，最後一組在 PLAN DONE 時送最後 1 下（第 N 下）。
 狀態檔停更不停止：等恢復，缺幾下補幾下（每下重讀，不多送）。只送 F1；其他異常 → 停止自動。
 
-  python dyno_f1timer.py --plan 60A            正式
+  python dyno_f1timer.py --plan 60A1           正式
   python dyno_f1timer.py --plan 60B --dry-run  演練：按 Enter 當 t0，照 PC 時間表倒數，不送鍵、不切視窗
-  python dyno_f1timer.py --plan 60A --check    只檢查（視窗、權限、切前景、狀態檔），不送任何鍵
+  python dyno_f1timer.py --plan 60A1 --check   只檢查（視窗、權限、切前景、狀態檔），不送任何鍵
 時程來自 plans.json（gen_plans.py 由 .ino 產生），不要手改。
 """
 import sys
@@ -29,7 +29,8 @@ F1_LEAD_S = 3.0          # 在 Mega 每組結束（= 下一組開始）前幾秒
 CATCHUP_GAP_S = 1.5      # 狀態檔停更恢復後補送 F1 之間的間隔（每下送前重讀狀態檔）
 ACT_EARLY_S = 8.0        # 送 F1 前幾秒先把功率機切到前景
 BAD_EVENT = re.compile(r"ABORT|LATE|NOT RUN|BOOT")
-PLAN_IDS = {"60A": 1, "60B": 2, "COMP": 3}   # 與 .ino PLANS[] 順序相同（測試會核對）
+# 0.12M：功率機最多 10 組 → 60A、COMP 各拆兩個。順序 = .ino PLANS[] = 記錄頁 PLAN_NAME（load_plan 會核對 plans.json）
+PLAN_IDS = {"60A1": 1, "60A2": 2, "60B": 3, "CMP1": 4, "CMP2": 5}
 BAR = "!" * 64
 
 
@@ -75,8 +76,8 @@ def load_plan(path, name):
     groups = p["groups"]
     if p["id"] != PLAN_IDS.get(name):
         raise ConfigError(f"{name} 的 id {p['id']} 與程式不符，請重跑 gen_plans.py")
-    if not 1 <= len(groups) + 1 <= min(20, k["PLAN_MAX_GROUPS"]):        # +1 = 功率機第 1 組（穩定組，F2 開始）
-        raise ConfigError(f"{name} 功率機組數 {len(groups) + 1}（含穩定組）超過 20")
+    if not 1 <= len(groups) + 1 <= k["PLAN_MAX_GROUPS"]:        # +1 = 功率機第 1 組（穩定組，F2 開始）
+        raise ConfigError(f"{name} 功率機組數 {len(groups) + 1}（含穩定組）超過 {k['PLAN_MAX_GROUPS']}")
     if p.get("f1_lead_s") != F1_LEAD_S or p.get("f1_program") != len(groups):
         raise ConfigError(f"{name}：plans.json 是舊版（沒有 f1_lead_s / f1_program），請重跑 gen_plans.py")
     for i, g in enumerate(groups):
@@ -245,7 +246,7 @@ class Runner:
         if not s:
             raise Halt("狀態檔還沒有 Mega 遙測（S 行）")
         if s.get("ncols", 0) < 21:
-            raise Halt("Mega 遙測沒有 sel 欄：Mega 不是 FW 0.11M（或記錄頁不是 0.11M 版）")
+            raise Halt("Mega 遙測沒有 sel 欄：Mega 不是 FW 0.11M 以後的版本（或記錄頁太舊）")
         if self.base is not None:
             if self.st.get("boots", 0) != self.base[0] or self.st.get("millis_backwards", 0) != self.base[1]:
                 raise Halt("Mega 重開了（BOOT / millis 倒退）：計畫已中斷，Mega 開機會自動歸零")
@@ -563,8 +564,8 @@ def do_check(cfg, plan, ops, log):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="功率機 F1 定時器（Mega 0.11M 計畫）")
-    ap.add_argument("--plan", help="60A / 60B / COMP")
+    ap = argparse.ArgumentParser(description="功率機 F1 定時器（Mega 0.12M 計畫）")
+    ap.add_argument("--plan", help=" / ".join(PLAN_IDS))
     ap.add_argument("--config", default=os.path.join(HERE, "config.toml"))
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--dry-run", action="store_true", help="演練：Enter 當 t0，不送鍵、不切視窗")
@@ -576,7 +577,7 @@ def main(argv=None):
         cfg = load_config(a.config)
         if not a.check:
             if not a.plan:
-                raise ConfigError("請指定 --plan 60A / 60B / COMP")
+                raise ConfigError("請指定 --plan " + " / ".join(PLAN_IDS))
             fw, pid, groups = load_plan(cfg["plans_file"], a.plan)
     except (OSError, ValueError, KeyError, ConfigError) as e:
         print(f"設定錯誤: {e}")

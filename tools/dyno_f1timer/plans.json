@@ -1,154 +1,151 @@
 {
  "source": "ems_head_unit_mega.ino",
- "fw_version": "0.11M",
+ "fw_version": "0.12M",
  "constants": {
   "PLAN_REST_SEQ": 1,
   "PLAN_MARGIN_S": 30,
   "PLAN_GAP_S": 5,
   "PLAN_LATE_GUARD_MS": 6000,
-  "PLAN_MAX_GROUPS": 20,
+  "PLAN_MAX_GROUPS": 10,
   "DYNO_GROUP_MAX_S": 600
  },
- "plans_line": 395,
- "const_line": 381,
+ "plans_line": 407,
+ "const_line": 383,
  "seqs": [
   {
    "no": 1,
    "name": "REST5",
    "len_s": 300,
    "array": "SQS_REST",
-   "line": 308
+   "line": 310
   },
   {
    "no": 2,
    "name": "HOLD5",
    "len_s": 480,
    "array": "SQS_HOLD",
-   "line": 309
+   "line": 311
   },
   {
    "no": 3,
    "name": "PATH-A",
    "len_s": 220,
    "array": "SQS_PTHA",
-   "line": 311
+   "line": 313
   },
   {
    "no": 4,
    "name": "PATH-B",
    "len_s": 230,
    "array": "SQS_PTHB",
-   "line": 313
+   "line": 315
   },
   {
    "no": 5,
    "name": "REV-A",
    "len_s": 190,
    "array": "SQS_REVA",
-   "line": 315
+   "line": 317
   },
   {
    "no": 6,
    "name": "REV-B",
    "len_s": 110,
    "array": "SQS_REVB",
-   "line": 317
+   "line": 319
   },
   {
    "no": 7,
    "name": "UP0-70",
    "len_s": 350,
    "array": "SQS_UP",
-   "line": 319
+   "line": 321
   },
   {
    "no": 8,
    "name": "UP80+",
    "len_s": 160,
    "array": "SQS_UPHI",
-   "line": 321
+   "line": 323
   },
   {
    "no": 9,
    "name": "DN100",
    "len_s": 440,
    "array": "SQS_D100",
-   "line": 323
+   "line": 325
   },
   {
    "no": 10,
    "name": "DN80",
    "len_s": 380,
    "array": "SQS_D80",
-   "line": 326
+   "line": 328
   },
   {
    "no": 11,
    "name": "DN60",
    "len_s": 310,
    "array": "SQS_D60",
-   "line": 328
+   "line": 330
   },
   {
    "no": 12,
    "name": "DN40",
    "len_s": 230,
    "array": "SQS_D40",
-   "line": 330
+   "line": 332
   },
   {
    "no": 13,
    "name": "DIP.5",
    "len_s": 220,
    "array": "SQS_DP05",
-   "line": 333
+   "line": 335
   },
   {
    "no": 14,
    "name": "DIP1",
    "len_s": 220,
    "array": "SQS_DP1",
-   "line": 334
+   "line": 336
   },
   {
    "no": 15,
    "name": "DIP2",
    "len_s": 220,
    "array": "SQS_DP2",
-   "line": 335
+   "line": 337
   },
   {
    "no": 16,
    "name": "DIP5",
    "len_s": 220,
    "array": "SQS_DP5",
-   "line": 336
+   "line": 338
   },
   {
    "no": 17,
    "name": "SLOWDN",
    "len_s": 440,
    "array": "SQS_SLOW",
-   "line": 337
+   "line": 339
   },
   {
    "no": 18,
    "name": "ZDWELL",
    "len_s": 390,
    "array": "SQS_ZDWL",
-   "line": 344
+   "line": 346
   }
  ],
  "plans": {
-  "60A": {
+  "60A1": {
    "id": 1,
    "segs": [
     18,
     7,
-    8,
-    9,
-    10,
-    11
+    8
    ],
    "groups": [
     {
@@ -213,89 +210,11 @@
      "mega_s": 160,
      "fw_slot_s": 190,
      "start_s": 1480,
-     "len_s": 195,
-     "f1_at_s": 192
-    },
-    {
-     "group": 6,
-     "dyno_group": 7,
-     "kind": "rest",
-     "seg": 0,
-     "seq": 1,
-     "seq_name": "REST5",
-     "mega_s": 300,
-     "fw_slot_s": 330,
-     "start_s": 1675,
-     "len_s": 335,
-     "f1_at_s": 332
-    },
-    {
-     "group": 7,
-     "dyno_group": 8,
-     "kind": "test",
-     "seg": 4,
-     "seq": 9,
-     "seq_name": "DN100",
-     "mega_s": 440,
-     "fw_slot_s": 470,
-     "start_s": 2010,
-     "len_s": 475,
-     "f1_at_s": 472
-    },
-    {
-     "group": 8,
-     "dyno_group": 9,
-     "kind": "rest",
-     "seg": 0,
-     "seq": 1,
-     "seq_name": "REST5",
-     "mega_s": 300,
-     "fw_slot_s": 330,
-     "start_s": 2485,
-     "len_s": 335,
-     "f1_at_s": 332
-    },
-    {
-     "group": 9,
-     "dyno_group": 10,
-     "kind": "test",
-     "seg": 5,
-     "seq": 10,
-     "seq_name": "DN80",
-     "mega_s": 380,
-     "fw_slot_s": 410,
-     "start_s": 2820,
-     "len_s": 415,
-     "f1_at_s": 412
-    },
-    {
-     "group": 10,
-     "dyno_group": 11,
-     "kind": "rest",
-     "seg": 0,
-     "seq": 1,
-     "seq_name": "REST5",
-     "mega_s": 300,
-     "fw_slot_s": 330,
-     "start_s": 3235,
-     "len_s": 335,
-     "f1_at_s": 332
-    },
-    {
-     "group": 11,
-     "dyno_group": 12,
-     "kind": "test",
-     "seg": 6,
-     "seq": 11,
-     "seq_name": "DN60",
-     "mega_s": 310,
-     "fw_slot_s": 340,
-     "start_s": 3570,
-     "len_s": 310,
+     "len_s": 160,
      "f1_at_s": null
     }
    ],
-   "dyno_groups": 12,
+   "dyno_groups": 6,
    "dyno_group_s": 600,
    "f1_lead_s": 3,
    "stabilize": {
@@ -304,12 +223,99 @@
     "start_key": "F2"
    },
    "f1_operator": 1,
-   "f1_program": 11,
-   "f1_total": 12,
-   "end_s": 3880
+   "f1_program": 5,
+   "f1_total": 6,
+   "end_s": 1640
+  },
+  "60A2": {
+   "id": 2,
+   "segs": [
+    9,
+    10,
+    11
+   ],
+   "groups": [
+    {
+     "group": 1,
+     "dyno_group": 2,
+     "kind": "test",
+     "seg": 1,
+     "seq": 9,
+     "seq_name": "DN100",
+     "mega_s": 440,
+     "fw_slot_s": 470,
+     "start_s": 0,
+     "len_s": 475,
+     "f1_at_s": 472
+    },
+    {
+     "group": 2,
+     "dyno_group": 3,
+     "kind": "rest",
+     "seg": 0,
+     "seq": 1,
+     "seq_name": "REST5",
+     "mega_s": 300,
+     "fw_slot_s": 330,
+     "start_s": 475,
+     "len_s": 335,
+     "f1_at_s": 332
+    },
+    {
+     "group": 3,
+     "dyno_group": 4,
+     "kind": "test",
+     "seg": 2,
+     "seq": 10,
+     "seq_name": "DN80",
+     "mega_s": 380,
+     "fw_slot_s": 410,
+     "start_s": 810,
+     "len_s": 415,
+     "f1_at_s": 412
+    },
+    {
+     "group": 4,
+     "dyno_group": 5,
+     "kind": "rest",
+     "seg": 0,
+     "seq": 1,
+     "seq_name": "REST5",
+     "mega_s": 300,
+     "fw_slot_s": 330,
+     "start_s": 1225,
+     "len_s": 335,
+     "f1_at_s": 332
+    },
+    {
+     "group": 5,
+     "dyno_group": 6,
+     "kind": "test",
+     "seg": 3,
+     "seq": 11,
+     "seq_name": "DN60",
+     "mega_s": 310,
+     "fw_slot_s": 340,
+     "start_s": 1560,
+     "len_s": 310,
+     "f1_at_s": null
+    }
+   ],
+   "dyno_groups": 6,
+   "dyno_group_s": 600,
+   "f1_lead_s": 3,
+   "stabilize": {
+    "dyno_group": 1,
+    "dyno_s": 600,
+    "start_key": "F2"
+   },
+   "f1_operator": 1,
+   "f1_program": 5,
+   "f1_total": 6,
+   "end_s": 1870
   },
   "60B": {
-   "id": 2,
+   "id": 3,
    "segs": [
     12,
     13,
@@ -449,15 +455,12 @@
    "f1_total": 10,
    "end_s": 2590
   },
-  "COMP": {
-   "id": 3,
+  "CMP1": {
+   "id": 4,
    "segs": [
     7,
     8,
-    9,
-    10,
-    11,
-    12
+    11
    ],
    "groups": [
     {
@@ -517,94 +520,16 @@
      "dyno_group": 6,
      "kind": "test",
      "seg": 3,
-     "seq": 9,
-     "seq_name": "DN100",
-     "mega_s": 440,
-     "fw_slot_s": 470,
-     "start_s": 1250,
-     "len_s": 475,
-     "f1_at_s": 472
-    },
-    {
-     "group": 6,
-     "dyno_group": 7,
-     "kind": "rest",
-     "seg": 0,
-     "seq": 1,
-     "seq_name": "REST5",
-     "mega_s": 300,
-     "fw_slot_s": 330,
-     "start_s": 1725,
-     "len_s": 335,
-     "f1_at_s": 332
-    },
-    {
-     "group": 7,
-     "dyno_group": 8,
-     "kind": "test",
-     "seg": 4,
-     "seq": 10,
-     "seq_name": "DN80",
-     "mega_s": 380,
-     "fw_slot_s": 410,
-     "start_s": 2060,
-     "len_s": 415,
-     "f1_at_s": 412
-    },
-    {
-     "group": 8,
-     "dyno_group": 9,
-     "kind": "rest",
-     "seg": 0,
-     "seq": 1,
-     "seq_name": "REST5",
-     "mega_s": 300,
-     "fw_slot_s": 330,
-     "start_s": 2475,
-     "len_s": 335,
-     "f1_at_s": 332
-    },
-    {
-     "group": 9,
-     "dyno_group": 10,
-     "kind": "test",
-     "seg": 5,
      "seq": 11,
      "seq_name": "DN60",
      "mega_s": 310,
      "fw_slot_s": 340,
-     "start_s": 2810,
-     "len_s": 345,
-     "f1_at_s": 342
-    },
-    {
-     "group": 10,
-     "dyno_group": 11,
-     "kind": "rest",
-     "seg": 0,
-     "seq": 1,
-     "seq_name": "REST5",
-     "mega_s": 300,
-     "fw_slot_s": 330,
-     "start_s": 3155,
-     "len_s": 335,
-     "f1_at_s": 332
-    },
-    {
-     "group": 11,
-     "dyno_group": 12,
-     "kind": "test",
-     "seg": 6,
-     "seq": 12,
-     "seq_name": "DN40",
-     "mega_s": 230,
-     "fw_slot_s": 260,
-     "start_s": 3490,
-     "len_s": 230,
+     "start_s": 1250,
+     "len_s": 310,
      "f1_at_s": null
     }
    ],
-   "dyno_groups": 12,
+   "dyno_groups": 6,
    "dyno_group_s": 600,
    "f1_lead_s": 3,
    "stabilize": {
@@ -613,9 +538,96 @@
     "start_key": "F2"
    },
    "f1_operator": 1,
-   "f1_program": 11,
-   "f1_total": 12,
-   "end_s": 3720
+   "f1_program": 5,
+   "f1_total": 6,
+   "end_s": 1560
+  },
+  "CMP2": {
+   "id": 5,
+   "segs": [
+    9,
+    10,
+    12
+   ],
+   "groups": [
+    {
+     "group": 1,
+     "dyno_group": 2,
+     "kind": "test",
+     "seg": 1,
+     "seq": 9,
+     "seq_name": "DN100",
+     "mega_s": 440,
+     "fw_slot_s": 470,
+     "start_s": 0,
+     "len_s": 475,
+     "f1_at_s": 472
+    },
+    {
+     "group": 2,
+     "dyno_group": 3,
+     "kind": "rest",
+     "seg": 0,
+     "seq": 1,
+     "seq_name": "REST5",
+     "mega_s": 300,
+     "fw_slot_s": 330,
+     "start_s": 475,
+     "len_s": 335,
+     "f1_at_s": 332
+    },
+    {
+     "group": 3,
+     "dyno_group": 4,
+     "kind": "test",
+     "seg": 2,
+     "seq": 10,
+     "seq_name": "DN80",
+     "mega_s": 380,
+     "fw_slot_s": 410,
+     "start_s": 810,
+     "len_s": 415,
+     "f1_at_s": 412
+    },
+    {
+     "group": 4,
+     "dyno_group": 5,
+     "kind": "rest",
+     "seg": 0,
+     "seq": 1,
+     "seq_name": "REST5",
+     "mega_s": 300,
+     "fw_slot_s": 330,
+     "start_s": 1225,
+     "len_s": 335,
+     "f1_at_s": 332
+    },
+    {
+     "group": 5,
+     "dyno_group": 6,
+     "kind": "test",
+     "seg": 3,
+     "seq": 12,
+     "seq_name": "DN40",
+     "mega_s": 230,
+     "fw_slot_s": 260,
+     "start_s": 1560,
+     "len_s": 230,
+     "f1_at_s": null
+    }
+   ],
+   "dyno_groups": 6,
+   "dyno_group_s": 600,
+   "f1_lead_s": 3,
+   "stabilize": {
+    "dyno_group": 1,
+    "dyno_s": 600,
+    "start_key": "F2"
+   },
+   "f1_operator": 1,
+   "f1_program": 5,
+   "f1_total": 6,
+   "end_s": 1790
   }
  }
 }

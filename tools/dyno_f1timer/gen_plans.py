@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""從 Mega FW 0.11M 的 .ino 解析 SEQ / 計畫表，產生 plans.json 與 DYNO_GROUP_TABLE_0.11M.md。
+"""從 Mega .ino（0.11M 起）解析 SEQ / 計畫表，產生 plans.json 與 arduino/docs/DYNO_GROUP_TABLE.md。
 
 唯一來源是 .ino（SQS_* 步表、SEQS、PLS_*、PLANS、PLAN_* 常數）；不要手改 plans.json。
 用法: python gen_plans.py [--ino PATH] [--json plans.json] [--md 表.md]
@@ -9,7 +9,7 @@ import argparse, json, os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 # repo 內的位置（tools/dyno_f1timer → arduino/）；在別處執行請用 --ino / --md 指定
 DEFAULT_INO = os.path.normpath(os.path.join(HERE, "..", "..", "arduino", "ems_head_unit_mega", "ems_head_unit_mega.ino"))
-DEFAULT_MD = os.path.normpath(os.path.join(HERE, "..", "..", "arduino", "docs", "DYNO_GROUP_TABLE_0.11M.md"))
+DEFAULT_MD = os.path.normpath(os.path.join(HERE, "..", "..", "arduino", "docs", "DYNO_GROUP_TABLE.md"))
 
 
 def _strip_comments(s):
@@ -122,22 +122,24 @@ def make_md(d):
     k = d["constants"]
     mx_c = max((g["mega_s"], n, g["group"]) for n, p in d["plans"].items() for g in p["groups"])
     mx_l = max((g["len_s"], n, g["group"]) for n, p in d["plans"].items() for g in p["groups"])
+    nlist = "、".join(f"{n} N={p['dyno_groups']}" for n, p in d["plans"].items())
+    klist = "；".join(f"{n} = 操作員 1 + 程式 {p['f1_program']} = {p['f1_total']}" for n, p in d["plans"].items())
     out = [f"# 功率機設定頁「組」對照表（Mega FW {d['fw_version']} 串接計畫）", "",
            f"> 由 `dyno_f1timer/gen_plans.py` 解析 `{d['source']}` 自動產生，**不要手改**；改 .ino 後重跑 `python gen_plans.py`。", "",
            "## 功率機設定",
            f"- 功率機**只認 F1**：每按一下 = 下一組；設定 N 組，按滿 N 下自己停。組長不影響換組。",
-           "- **N = F1 的下數，F2 不算**（60A／COMP N=12、60B N=10）。**第一次正式跑時確認功率機在最後一下 F1 後真的自己停。**",
+           f"- **N = F1 的下數，F2 不算**（{nlist}）。**第一次正式跑時確認功率機在最後一下 F1 後真的自己停。**",
            f"- **每一組（含第 1 組穩定組）組長都設 {DYNO_GROUP_S} s**，只要求不會在 F1 之前自己結束。",
            f"  - Mega 每組內容最長 {mx_c[0]} s（{mx_c[1]} G{mx_c[2]}）、整組（含 HOLD）最長 {mx_l[0]} s（{mx_l[1]} G{mx_l[2]}），都 < {DYNO_GROUP_S} s（gen_plans.py 與測試檢查）。",
            f"  - 穩定組：F2 開始，**必須在 {DYNO_GROUP_S} s 內按第一下 F1**（否則穩定組自己結束）。",
-           "- 組數：功率機 N = 穩定組 + Mega 組數（60A／COMP 12、60B 10，≤ 20）。", "",
+           f"- 組數：功率機 N = 穩定組 + Mega 組數，**功率機最多只能設 {k['PLAN_MAX_GROUPS']} 組**（2026-10-19 確認），所以一個計畫最多 5 段。", "",
            "## F1 怎麼按（共 N 下）",
            "- F2 → 第 1 組（穩定組）。轉速穩定後**操作員按第 1 下 F1**（→ 功率機第 2 組），3 s 內 Mega 按 \\* → Mega G1。",
            f"- 之後 dyno_f1timer 只跟著 Mega：在 **Mega 每一組結束前 {F1_LEAD_S} s** 送 1 下 F1（休息組也一樣）→ 功率機和 Mega 一起換組。",
            "  - 「組結束」= 下一組開始（韌體 `planNextAt`，從 \\* 起的絕對排程）= 內容 + HOLD（內容跑完後阻力 0 等）。內容結束和組結束不同；以組結束為準，所以 F1 落在 HOLD 期間、不會切掉內容。",
            "  - 剩餘時間 = 這組長度 − 已過時間；已過時間 = 現在 − 狀態檔的 `grp_since_pc_ms`（記錄頁收到 Mega 換組的時刻，誤差 ≤ 0.5 s）。每組重新對齊，沒有獨立 PC 倒數表。",
            "- **最後一組沒有下一組**：Mega 內容跑完就 `PLAN DONE`（不 HOLD），程式看到 PLAN DONE 時送**最後 1 下（第 N 下）**，功率機按滿 N 下自己停。",
-           "- 按鍵數：60B = 操作員 1 + 程式 9 = 10；60A／COMP = 操作員 1 + 程式 11 = 12。", "",
+           f"- 按鍵數：{klist}。", "",
            "## 狀態檔停更（> 3 s 沒更新）：不停止",
            "- 停更期間不送、不停止，終端一行顯示；恢復後看 Mega 目前組號，缺幾下就補幾下，每下間隔 1.5 s，每下送前重讀狀態檔＋確認前景，已送數不會超過 Mega 實際走到的地方。", "",
            "## 韌體的 30 s 餘裕 / HOLD / LATE（PM 待決）",

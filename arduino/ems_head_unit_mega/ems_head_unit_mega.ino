@@ -5,7 +5,7 @@
     功能、按鍵、遙測格式以 Nano 版 FW 0.7 為基礎（0.8M 起 Mega 版另加功能，見 FW_VERSION 註解），只有硬體相關的三處不同：
       1. 下控 UART 改用硬體 Serial1（RX1 = D19、TX1 = D18），不用 AltSoftSerial
       2. OLED I2C 在 Mega 上是 D20 = SDA、D21 = SCL（不是 A4 / A5）
-      3. FW_VERSION 標 "0.11M"，回報問題時分得出是哪一版
+      3. FW_VERSION 標 "0.12M"，回報問題時分得出是哪一版
     之後改 Nano 版時，這份要跟著改；換回 Nano 後這份可以刪掉。
 
   ── 以下為原 Nano 版說明 ──
@@ -57,10 +57,13 @@
 #include <stdarg.h>
 
 /* ==================== 設定 ==================== */
-#define FW_VERSION         "0.11M"  // 顯示在待機畫面上，回報問題時用來對版本；0.8M 加 SLOWDN / ZDWELL；
+#define FW_VERSION         "0.12M"  // 顯示在待機畫面上，回報問題時用來對版本；0.8M 加 SLOWDN / ZDWELL；
                                    // 0.9M：斷線逾時自動中止＋歸零、SET_CONTROL 收 ACK 才算數、SEQ DONE 自動 STOP、序列不受按鍵擋推送
                                    // 0.10M：SET 0 失敗仍送 STOP、BAD_STATE / 已停止就結束歸零、RX 斷時盲送 STOP、斷線暫停計時
                                    // 0.11M：串接計畫 60A / 60B / COMP（段間休息 300 s、對齊功率機的組）、遙測 S 行加 plan 欄位
+                                   // 0.12M：功率機最多只能設 10 組 → 60A、COMP 各拆兩個計畫（60A1/60A2、CMP1/CMP2），
+                                   //        組數上限改 10（含功率機穩定組）並在編譯期檢查；
+                                   //        修正 LINK LOST 會把短暫歸零提早取消（10/19 60B DIP5 只歸零 ~1 s）
 #define EMS_BAUD          19200   // 通訊協定 §2
 #define TELEM_BAUD       115200   // D0/D1 遙測輸出速率
 #define OLED_ADDR          0x3C
@@ -379,21 +382,32 @@ static constexpr SeqDef SEQS[] PROGMEM = {
    對齊：操作員「先按功率機 F1，3 秒內再按 *」；planT0 取在按 * 那一刻，比 F1 晚 ≤3 s，從 30 s 餘裕扣。
    dyno_f1timer/gen_plans.py 直接解析本檔這些表與常數產生 plans.json，不要手抄到別處。 */
 #define PLAN_REST_SEQ       1    // 休息用哪個 SEQ（1 = REST5，{0,300}）
-#define PLAN_MARGIN_S      30    // 組長餘裕：F1 對時誤差 + 0.10M 斷線暫停計時的累積（見 DYNO_GROUP_TABLE_0.11M.md）
+#define PLAN_MARGIN_S      30    // 組長餘裕：F1 對時誤差 + 0.10M 斷線暫停計時的累積（見 arduino/docs/DYNO_GROUP_TABLE.md）
 #define PLAN_GAP_S          5    // 功率機上一組錄完到下一次 F1 的間隔（REVIEW.md H1）
 #define PLAN_LATE_GUARD_MS 6000  // 內容必須在功率機這組停錄前至少這麼久跑完：* 比 F1 晚 ≤3 s ＋ F1 延遲 ＋ 時鐘漂移（REVIEW_2_claude M2）
-#define PLAN_MAX_GROUPS    20    // 功率機設定頁最多 20 組
+/* 0.12M：實際功率機設定頁最多只能設 10 組（第 11 組以後畫面顯示不出來，2026-10-19 確認），
+   其中第 1 組是 F2 開始的穩定組，所以 Mega 一個計畫最多 9 組 = 5 段 + 4 段休息。 */
+#define PLAN_MAX_GROUPS    10    // 功率機設定頁最多 10 組（含穩定組）
 #define DYNO_GROUP_MAX_S  600    // 功率機每組上限 600 秒
 
 struct PlanDef { const char *name; const uint8_t *segs; uint8_t n; };
-/* 段 = SEQ 編號（1 起算，跟畫面上 SEQn 一樣） */
-static constexpr uint8_t PLS_60A[]  PROGMEM = { 18, 7, 8, 9, 10, 11 };      // ZDWELL, UP0-70, UP80+, DN100, DN80, DN60
-static constexpr uint8_t PLS_60B[]  PROGMEM = { 12, 13, 14, 15, 16 };       // DN40, DIP.5, DIP1, DIP2, DIP5
-static constexpr uint8_t PLS_COMP[] PROGMEM = { 7, 8, 9, 10, 11, 12 };      // UP0-70, UP80+, DN100, DN80, DN60, DN40
-static const char PN1[] PROGMEM = "60A"; static const char PN2[] PROGMEM = "60B";
-static const char PN3[] PROGMEM = "COMP";
+/* 段 = SEQ 編號（1 起算，跟畫面上 SEQn 一樣）。名稱最多 4 字（畫面 PLAN %-4s、事件 P%s G…）。
+   0.12M：60A、COMP 原本各 6 段（11 組）超過上限，各拆成兩個 3 段計畫（5 組，功率機設 6 組）。
+   COMP 拆法刻意把兩個最重的段 UP80+（SEQ8）與 DN100（SEQ9）分到不同計畫：
+   90 rpm 時這兩段各要連續 90 秒吃 1.35～1.56 kW，放同一輪功率機容易熱累積跳保護。
+   升、降曲線之間都隔 5 分鐘休息、互不影響，所以段的先後不影響數據。 */
+static constexpr uint8_t PLS_60A1[] PROGMEM = { 18, 7, 8 };          // ZDWELL, UP0-70, UP80+
+static constexpr uint8_t PLS_60A2[] PROGMEM = { 9, 10, 11 };         // DN100, DN80, DN60
+static constexpr uint8_t PLS_60B[]  PROGMEM = { 12, 13, 14, 15, 16 }; // DN40, DIP.5, DIP1, DIP2, DIP5
+static constexpr uint8_t PLS_CMP1[] PROGMEM = { 7, 8, 11 };          // UP0-70, UP80+, DN60
+static constexpr uint8_t PLS_CMP2[] PROGMEM = { 9, 10, 12 };         // DN100, DN80, DN40
+static const char PN1[] PROGMEM = "60A1"; static const char PN2[] PROGMEM = "60A2";
+static const char PN3[] PROGMEM = "60B";  static const char PN4[] PROGMEM = "CMP1";
+static const char PN5[] PROGMEM = "CMP2";
+/* 順序 = 計畫編號（遙測 plan / sel 欄）；head_unit_logger.html 的 PLAN_NAME 與 dyno_f1timer.py 的 PLAN_IDS 要同步 */
 static constexpr PlanDef PLANS[] PROGMEM = {
-  { PN1, PLS_60A, SQN(PLS_60A) }, { PN2, PLS_60B, SQN(PLS_60B) }, { PN3, PLS_COMP, SQN(PLS_COMP) } };
+  { PN1, PLS_60A1, SQN(PLS_60A1) }, { PN2, PLS_60A2, SQN(PLS_60A2) }, { PN3, PLS_60B, SQN(PLS_60B) },
+  { PN4, PLS_CMP1, SQN(PLS_CMP1) }, { PN5, PLS_CMP2, SQN(PLS_CMP2) } };
 #define PLAN_N SQN(PLANS)
 
 /* ---- 編譯期檢查：只在編譯時讀表（執行時 PROGMEM 一律走 pgm_read） ---- */
@@ -408,12 +422,12 @@ struct Cx {
   return n == 0 || (g[n - 1] >= 2 && g[n - 1] <= SEQ_N && cxDynoS(cxSeqS(g[n - 1])) <= DYNO_GROUP_MAX_S &&
                       cxSegsOk(g, (uint8_t)(n - 1))); }
   static constexpr bool cxPlansOk(uint8_t i) {
-  return i == 0 || (PLANS[i - 1].n >= 1 && cxGroups(PLANS[i - 1].n) <= PLAN_MAX_GROUPS &&
+  return i == 0 || (PLANS[i - 1].n >= 1 && cxGroups(PLANS[i - 1].n) + 1 <= PLAN_MAX_GROUPS &&   // +1 = 穩定組
                       cxSegsOk(PLANS[i - 1].segs, PLANS[i - 1].n) && cxPlansOk((uint8_t)(i - 1))); }
 };
 static_assert(Cx::cxSeqS(PLAN_REST_SEQ) == 300, "休息段必須是 REST5（300 s）");
 static_assert(Cx::cxDynoS(Cx::cxSeqS(PLAN_REST_SEQ)) <= DYNO_GROUP_MAX_S, "休息組超過功率機每組上限");
-static_assert(Cx::cxPlansOk(PLAN_N), "計畫超過 20 組、某組超過 600 s，或段不是 SEQ2～SEQ_N");
+static_assert(Cx::cxPlansOk(PLAN_N), "某計畫功率機超過 10 組（含穩定組，即 Mega 最多 5 段）、某組超過 600 s，或段不是 SEQ2～SEQ_N");
 static_assert(SEQ_N + PLAN_N < 255, "選單索引溢位");
 static_assert(PLAN_MARGIN_S * 1000UL > PLAN_LATE_GUARD_MS + 3000UL + 1000UL + 5000UL,
               "餘裕要大於 LATE 保護 + F1/* 對時 3 s + arm 1 s + 至少 5 s 斷線暫停");
@@ -1160,7 +1174,7 @@ static void telemetry() {
   Serial.print(linkAlive ? 1 : 0);  Serial.print(',');
   Serial.print(vinMv);
   /* 0.11M 追加（舊的 13 欄不動）：plan,grp,seg,rest,hold,seq,step,sel
-     plan = 1 60A / 2 60B / 3 COMP / 0 沒有計畫；grp = 第幾組（1 起算）；seg = 第幾段量測（休息組 0）；
+     plan = 1 60A1 / 2 60A2 / 3 60B / 4 CMP1 / 5 CMP2 / 0 沒有計畫（0.12M）；grp = 第幾組（1 起算）；seg = 第幾段量測（休息組 0）；
      rest = 休息組；hold = 內容跑完、阻力 0 等下一組；seq / step = 正在跑的 SEQ 與步（沒跑 = 0） */
   bool pa = planActive;
   Serial.print(','); Serial.print(pa ? planId : 0);
@@ -1266,7 +1280,7 @@ ackTimeoutDone:
   if (uiSeq) {
     /* SEQ 畫面：↑↓ 選序列；跑的時候不准動，避免誤觸改掉 duty */
     if (!seqActive) {
-      /* 0.11M：SEQ1..SEQ_N 之後接著是計畫 60A / 60B / COMP */
+      /* 0.11M：SEQ1..SEQ_N 之後接著是計畫 60A1 / 60A2 / 60B / CMP1 / CMP2（0.12M） */
       if (evEdge[B_UP])   { uiSel = (uint8_t)((uiSel + 1) % (SEQ_N + PLAN_N)); msg[0] = 0; }
       if (evEdge[B_DOWN]) { uiSel = (uint8_t)((uiSel + SEQ_N + PLAN_N - 1) % (SEQ_N + PLAN_N)); msg[0] = 0; }
       if (uiSel < SEQ_N) seqSel = uiSel;
@@ -1349,11 +1363,14 @@ ackTimeoutDone:
   }
 
   /* ---- 短暫歸零 ---- 歸零期間擋住一般推送，時間到才把 target 送回去 */
-  if (dipPhase && !confirmedRunning()) dipPhase = 0;      // 停了就不用回復
+  /* 0.12M：只有「鏈路活著、下控確認不在 RUNNING」才取消歸零。原本 !confirmedRunning() 在 LINK LOST
+     （約每 7 秒一次、每次 ~0.1 s）時也成立 —— 10/19 60B 的 DIP5 在歸零 0.9 s 時碰上 LINK LOST，
+     歸零被取消、序列補推 30%，實際只歸零約 1 秒，那一段數據作廢。 */
+  if (dipPhase && linkAlive && !confirmedRunning()) dipPhase = 0;      // 真的停了就不用回復
   if (dipPhase == 1 && seq == SQ_NONE && !pendCmd) {
     sendSetControl(0);                                    // ACK 後 lastSent 變 0，送回時就不會再觸發歸零
     seq = SQ_DIP; dipPhase = 2; dipT0 = now;              // ACK 回來時 dipT0 會再校正
-  } else if (dipPhase == 2 && seq == SQ_NONE && !pendCmd &&
+  } else if (dipPhase == 2 && linkAlive && seq == SQ_NONE && !pendCmd &&   // 斷線中先不結束，等鏈路回來再送回
              (int32_t)(now - dipT0) >= (int32_t)dipLenMs) {
     /* 有號比較：dipT0 是在 ACK 處理時取的 millis()，可能比這一圈的 now 還晚 */
     dipPhase = 0;

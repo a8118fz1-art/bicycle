@@ -147,7 +147,8 @@ let saveTimer = null;
 const HEADER = 'pc_time,pc_epoch_ms,type,nano_ms,flywheel_rpm,cadence,pwr_w,current_ma,'
              + 'duty_pct,tgt_reported,target_local,mode,flags,err,link,vin_v,note,'
              + 'plan,grp,seg,rest,hold,seq,step,sel';   // FW 0.11M 起追加（舊 FW 這 8 欄留空）
-const PLAN_NAME = ['', '60A', '60B', 'COMP'];
+/* 0.12M：計畫編號（遙測 plan / sel 欄）→ 名字。要與 Mega .ino 的 PLANS[] 順序、dyno_f1timer.py 的 PLAN_IDS 同步 */
+const PLAN_NAME = ['', '60A1', '60A2', '60B', 'CMP1', 'CMP2'];
 const NO_PLAN = ['', '', '', '', '', '', '', ''];
 
 function log(s) {
@@ -175,7 +176,7 @@ function handleLine(line) {
   if (p[0] === 'S' && p.length >= 13) {
     const [, ms, rpm, watt, ma, dx10, tgt, target, mode, flags, err, link, vinMv] = p.map(Number);
     const cad = rpm / RATIO;
-    /* FW 0.11M：第 14～20 欄 plan,grp,seg,rest,hold,seq,step；plan 存名字（60A/60B/COMP），0 = 空白 */
+    /* FW 0.11M：第 14～20 欄 plan,grp,seg,rest,hold,seq,step；plan 存名字（0.12M：60A1/60A2/60B/CMP1/CMP2），0 = 空白 */
     const pl = p.length >= 20
       ? [PLAN_NAME[Number(p[13])] ?? p[13], ...p.slice(14, 20).map(x => x.trim()),
          p.length >= 21 ? (PLAN_NAME[Number(p[20])] ?? p[20]) : '']
@@ -363,7 +364,7 @@ function statusOnE(ms, msg) {
   if (st.events.length > 30) st.events.shift();
   const m = /^BOOT FW (\S+)/.exec(msg);
   if (m) { st.boots++; st.fw = m[1]; }
-  /* 換組事件（P60A G3/11 TEST）比 S 行早最多 0.5 s 到，用它當換組時刻 */
+  /* 換組事件（P60A1 G3/5 TEST）比 S 行早最多 0.5 s 到，用它當換組時刻 */
   const g = /^P(\S+) G(\d+)\//.exec(msg);
   if (g) { const id = PLAN_NAME.indexOf(g[1]); const key = `${id}/${g[2]}`;
            if (key !== st.grpKey) { st.grpKey = key; st.grpSincePc = Date.now(); } }
