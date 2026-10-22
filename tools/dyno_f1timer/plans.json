@@ -1,6 +1,6 @@
 {
  "source": "ems_head_unit_mega.ino",
- "fw_version": "0.13M",
+ "fw_version": "0.14M",
  "constants": {
   "PLAN_REST_SEQ": 1,
   "PLAN_MARGIN_S": 30,
@@ -9,162 +9,169 @@
   "PLAN_MAX_GROUPS": 10,
   "DYNO_GROUP_MAX_S": 600
  },
- "plans_line": 433,
- "const_line": 404,
+ "plans_line": 442,
+ "const_line": 411,
  "seqs": [
   {
    "no": 1,
    "name": "REST5",
    "len_s": 300,
    "array": "SQS_REST",
-   "line": 312
+   "line": 313
   },
   {
    "no": 2,
    "name": "HOLD5",
    "len_s": 480,
    "array": "SQS_HOLD",
-   "line": 313
+   "line": 314
   },
   {
    "no": 3,
    "name": "PATH-A",
    "len_s": 220,
    "array": "SQS_PTHA",
-   "line": 315
+   "line": 316
   },
   {
    "no": 4,
    "name": "PATH-B",
    "len_s": 230,
    "array": "SQS_PTHB",
-   "line": 317
+   "line": 318
   },
   {
    "no": 5,
    "name": "REV-A",
    "len_s": 190,
    "array": "SQS_REVA",
-   "line": 319
+   "line": 320
   },
   {
    "no": 6,
    "name": "REV-B",
    "len_s": 110,
    "array": "SQS_REVB",
-   "line": 321
+   "line": 322
   },
   {
    "no": 7,
    "name": "UP0-70",
    "len_s": 350,
    "array": "SQS_UP",
-   "line": 323
+   "line": 324
   },
   {
    "no": 8,
    "name": "UP80+",
    "len_s": 160,
    "array": "SQS_UPHI",
-   "line": 325
+   "line": 326
   },
   {
    "no": 9,
    "name": "DN100",
    "len_s": 440,
    "array": "SQS_D100",
-   "line": 327
+   "line": 328
   },
   {
    "no": 10,
    "name": "DN80",
    "len_s": 380,
    "array": "SQS_D80",
-   "line": 330
+   "line": 331
   },
   {
    "no": 11,
    "name": "DN60",
    "len_s": 310,
    "array": "SQS_D60",
-   "line": 332
+   "line": 333
   },
   {
    "no": 12,
    "name": "DN40",
    "len_s": 230,
    "array": "SQS_D40",
-   "line": 334
+   "line": 335
   },
   {
    "no": 13,
    "name": "DIP.5",
    "len_s": 220,
    "array": "SQS_DP05",
-   "line": 337
+   "line": 338
   },
   {
    "no": 14,
    "name": "DIP1",
    "len_s": 220,
    "array": "SQS_DP1",
-   "line": 338
+   "line": 339
   },
   {
    "no": 15,
    "name": "DIP2",
    "len_s": 220,
    "array": "SQS_DP2",
-   "line": 339
+   "line": 340
   },
   {
    "no": 16,
    "name": "DIP5",
    "len_s": 220,
    "array": "SQS_DP5",
-   "line": 340
+   "line": 341
   },
   {
    "no": 17,
    "name": "SLOWDN",
    "len_s": 440,
    "array": "SQS_SLOW",
-   "line": 341
+   "line": 342
   },
   {
    "no": 18,
    "name": "ZDWELL",
    "len_s": 390,
    "array": "SQS_ZDWL",
-   "line": 348
+   "line": 349
   },
   {
    "no": 19,
    "name": "UP0-80",
    "len_s": 265,
    "array": "SQS_U80Q",
-   "line": 358
+   "line": 359
   },
   {
    "no": 20,
    "name": "DN80Q",
    "len_s": 265,
    "array": "SQS_D80Q",
-   "line": 360
+   "line": 361
   },
   {
    "no": 21,
    "name": "DN60Q",
    "len_s": 215,
    "array": "SQS_D60Q",
-   "line": 362
+   "line": 363
   },
   {
    "no": 22,
    "name": "DN40Q",
    "len_s": 165,
    "array": "SQS_D40Q",
-   "line": 364
+   "line": 365
+  },
+  {
+   "no": 23,
+   "name": "UP0-50",
+   "len_s": 190,
+   "array": "SQS_U50Q",
+   "line": 369
   }
  ],
  "plans": {
@@ -776,6 +783,66 @@
    "f1_program": 3,
    "f1_total": 4,
    "end_s": 805
+  },
+  "C120": {
+   "id": 8,
+   "segs": [
+    23,
+    22
+   ],
+   "groups": [
+    {
+     "group": 1,
+     "dyno_group": 2,
+     "kind": "test",
+     "seg": 1,
+     "seq": 23,
+     "seq_name": "UP0-50",
+     "mega_s": 190,
+     "fw_slot_s": 220,
+     "start_s": 0,
+     "len_s": 225,
+     "f1_at_s": 222
+    },
+    {
+     "group": 2,
+     "dyno_group": 3,
+     "kind": "rest",
+     "seg": 0,
+     "seq": 1,
+     "seq_name": "REST5",
+     "mega_s": 300,
+     "fw_slot_s": 330,
+     "start_s": 225,
+     "len_s": 335,
+     "f1_at_s": 332
+    },
+    {
+     "group": 3,
+     "dyno_group": 4,
+     "kind": "test",
+     "seg": 2,
+     "seq": 22,
+     "seq_name": "DN40Q",
+     "mega_s": 165,
+     "fw_slot_s": 200,
+     "start_s": 560,
+     "len_s": 165,
+     "f1_at_s": null
+    }
+   ],
+   "dyno_groups": 4,
+   "dyno_group_s": 600,
+   "f1_lead_s": 3,
+   "stabilize": {
+    "dyno_group": 1,
+    "dyno_s": 600,
+    "start_key": "F2"
+   },
+   "f1_operator": 1,
+   "f1_program": 3,
+   "f1_total": 4,
+   "end_s": 725
   }
  }
 }

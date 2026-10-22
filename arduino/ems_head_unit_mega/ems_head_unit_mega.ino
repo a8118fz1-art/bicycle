@@ -5,7 +5,7 @@
     功能、按鍵、遙測格式以 Nano 版 FW 0.7 為基礎（0.8M 起 Mega 版另加功能，見 FW_VERSION 註解），只有硬體相關的三處不同：
       1. 下控 UART 改用硬體 Serial1（RX1 = D19、TX1 = D18），不用 AltSoftSerial
       2. OLED I2C 在 Mega 上是 D20 = SDA、D21 = SCL（不是 A4 / A5）
-      3. FW_VERSION 標 "0.13M"，回報問題時分得出是哪一版
+      3. FW_VERSION 標 "0.14M"，回報問題時分得出是哪一版
     之後改 Nano 版時，這份要跟著改；換回 Nano 後這份可以刪掉。
 
   ── 以下為原 Nano 版說明 ──
@@ -57,7 +57,7 @@
 #include <stdarg.h>
 
 /* ==================== 設定 ==================== */
-#define FW_VERSION         "0.13M"  // 顯示在待機畫面上，回報問題時用來對版本；0.8M 加 SLOWDN / ZDWELL；
+#define FW_VERSION         "0.14M"  // 顯示在待機畫面上，回報問題時用來對版本；0.8M 加 SLOWDN / ZDWELL；
                                    // 0.9M：斷線逾時自動中止＋歸零、SET_CONTROL 收 ACK 才算數、SEQ DONE 自動 STOP、序列不受按鍵擋推送
                                    // 0.10M：SET 0 失敗仍送 STOP、BAD_STATE / 已停止就結束歸零、RX 斷時盲送 STOP、斷線暫停計時
                                    // 0.11M：串接計畫 60A / 60B / COMP（段間休息 300 s、對齊功率機的組）、遙測 S 行加 plan 欄位
@@ -65,6 +65,7 @@
                                    //        組數上限改 10（含功率機穩定組）並在編譯期檢查；
                                    //        修正 LINK LOST 會把短暫歸零提早取消（10/19 60B DIP5 只歸零 ~1 s）
                                    // 0.13M：90 rpm 專用 SEQ19～22（最高 80%、每步 25 秒）與計畫 C90A / C90B
+                                   // 0.14M：120 rpm 專用 SEQ23 UP0-50 與計畫 C120（UP0-50, DN40Q）
 #define EMS_BAUD          19200   // 通訊協定 §2
 #define TELEM_BAUD       115200   // D0/D1 遙測輸出速率
 #define OLED_ADDR          0x3C
@@ -363,6 +364,10 @@ static constexpr SeqStep SQS_D60Q[] PROGMEM = {  // 從 60 往下（215 秒）
   {0,25,0},{600,25,0},{500,25,0},{400,25,0},{300,25,0},{200,25,0},{100,40,0},{0,25,0} };
 static constexpr SeqStep SQS_D40Q[] PROGMEM = {  // 從 40 往下（165 秒）
   {0,25,0},{400,25,0},{300,25,0},{200,25,0},{100,40,0},{0,25,0} };
+/* 0.14M：120 rpm 只做到 50%。120 rpm 時 KP14 需要 duty 約 75%（約 1.75 kW），已碰到功率機
+   冷機最高紀錄 1748 W，全範圍做不到；50% 約 1.28 kW、只停 25 秒。50% 以上用 90 rpm 的高 duty 補。 */
+static constexpr SeqStep SQS_U50Q[] PROGMEM = {  // 上升到 50（190 秒）
+  {0,25,0},{100,40,0},{200,25,0},{300,25,0},{400,25,0},{500,25,0},{0,25,0} };
 
 struct SeqDef { const char *name; const SeqStep *steps; uint8_t n; };
 static const char SN1[]  PROGMEM = "REST5";  static const char SN2[]  PROGMEM = "HOLD5";
@@ -376,6 +381,7 @@ static const char SN15[] PROGMEM = "DIP2";   static const char SN16[] PROGMEM = 
 static const char SN17[] PROGMEM = "SLOWDN"; static const char SN18[] PROGMEM = "ZDWELL";
 static const char SN19[] PROGMEM = "UP0-80"; static const char SN20[] PROGMEM = "DN80Q";
 static const char SN21[] PROGMEM = "DN60Q";  static const char SN22[] PROGMEM = "DN40Q";
+static const char SN23[] PROGMEM = "UP0-50";
 #define SQN(a) (uint8_t)(sizeof(a) / sizeof(a[0]))
 #define SQ(n, a) { n, a, SQN(a) }
 static constexpr SeqDef SEQS[] PROGMEM = {
@@ -384,7 +390,8 @@ static constexpr SeqDef SEQS[] PROGMEM = {
   SQ(SN9, SQS_D100), SQ(SN10, SQS_D80), SQ(SN11, SQS_D60), SQ(SN12, SQS_D40),
   SQ(SN13, SQS_DP05), SQ(SN14, SQS_DP1), SQ(SN15, SQS_DP2), SQ(SN16, SQS_DP5),
   SQ(SN17, SQS_SLOW), SQ(SN18, SQS_ZDWL),
-  SQ(SN19, SQS_U80Q), SQ(SN20, SQS_D80Q), SQ(SN21, SQS_D60Q), SQ(SN22, SQS_D40Q) };
+  SQ(SN19, SQS_U80Q), SQ(SN20, SQS_D80Q), SQ(SN21, SQS_D60Q), SQ(SN22, SQS_D40Q),
+  SQ(SN23, SQS_U50Q) };
 #define SEQ_N SQN(SEQS)
 
 /* ==================== 串接計畫（0.11M） ====================
@@ -425,15 +432,17 @@ static constexpr uint8_t PLS_CMP2[] PROGMEM = { 9, 10, 12 };         // DN100, D
    DN80Q 的 80～50）分在不同計畫，各配一個輕的段。 */
 static constexpr uint8_t PLS_C90A[] PROGMEM = { 19, 21 };            // UP0-80, DN60Q
 static constexpr uint8_t PLS_C90B[] PROGMEM = { 20, 22 };            // DN80Q, DN40Q
+/* 0.14M：120 rpm（冷機開始，跑前確認功率機額定功率） */
+static constexpr uint8_t PLS_C120[] PROGMEM = { 23, 22 };            // UP0-50, DN40Q
 static const char PN1[] PROGMEM = "60A1"; static const char PN2[] PROGMEM = "60A2";
 static const char PN3[] PROGMEM = "60B";  static const char PN4[] PROGMEM = "CMP1";
 static const char PN5[] PROGMEM = "CMP2"; static const char PN6[] PROGMEM = "C90A";
-static const char PN7[] PROGMEM = "C90B";
+static const char PN7[] PROGMEM = "C90B"; static const char PN8[] PROGMEM = "C120";
 /* 順序 = 計畫編號（遙測 plan / sel 欄）；head_unit_logger.html 的 PLAN_NAME 與 dyno_f1timer.py 的 PLAN_IDS 要同步 */
 static constexpr PlanDef PLANS[] PROGMEM = {
   { PN1, PLS_60A1, SQN(PLS_60A1) }, { PN2, PLS_60A2, SQN(PLS_60A2) }, { PN3, PLS_60B, SQN(PLS_60B) },
   { PN4, PLS_CMP1, SQN(PLS_CMP1) }, { PN5, PLS_CMP2, SQN(PLS_CMP2) },
-  { PN6, PLS_C90A, SQN(PLS_C90A) }, { PN7, PLS_C90B, SQN(PLS_C90B) } };
+  { PN6, PLS_C90A, SQN(PLS_C90A) }, { PN7, PLS_C90B, SQN(PLS_C90B) }, { PN8, PLS_C120, SQN(PLS_C120) } };
 #define PLAN_N SQN(PLANS)
 
 /* ---- 編譯期檢查：只在編譯時讀表（執行時 PROGMEM 一律走 pgm_read） ---- */
@@ -1200,7 +1209,7 @@ static void telemetry() {
   Serial.print(linkAlive ? 1 : 0);  Serial.print(',');
   Serial.print(vinMv);
   /* 0.11M 追加（舊的 13 欄不動）：plan,grp,seg,rest,hold,seq,step,sel
-     plan = 1 60A1 / 2 60A2 / 3 60B / 4 CMP1 / 5 CMP2 / 6 C90A / 7 C90B / 0 沒有計畫（0.13M）；grp = 第幾組（1 起算）；seg = 第幾段量測（休息組 0）；
+     plan = 1 60A1 / 2 60A2 / 3 60B / 4 CMP1 / 5 CMP2 / 6 C90A / 7 C90B / 8 C120 / 0 沒有計畫（0.14M）；grp = 第幾組（1 起算）；seg = 第幾段量測（休息組 0）；
      rest = 休息組；hold = 內容跑完、阻力 0 等下一組；seq / step = 正在跑的 SEQ 與步（沒跑 = 0） */
   bool pa = planActive;
   Serial.print(','); Serial.print(pa ? planId : 0);
@@ -1306,7 +1315,7 @@ ackTimeoutDone:
   if (uiSeq) {
     /* SEQ 畫面：↑↓ 選序列；跑的時候不准動，避免誤觸改掉 duty */
     if (!seqActive) {
-      /* 0.11M：SEQ1..SEQ_N 之後接著是計畫 60A1 / 60A2 / 60B / CMP1 / CMP2 / C90A / C90B（0.13M） */
+      /* 0.11M：SEQ1..SEQ_N 之後接著是計畫 60A1 / 60A2 / 60B / CMP1 / CMP2 / C90A / C90B / C120（0.14M） */
       if (evEdge[B_UP])   { uiSel = (uint8_t)((uiSel + 1) % (SEQ_N + PLAN_N)); msg[0] = 0; }
       if (evEdge[B_DOWN]) { uiSel = (uint8_t)((uiSel + SEQ_N + PLAN_N - 1) % (SEQ_N + PLAN_N)); msg[0] = 0; }
       if (uiSel < SEQ_N) seqSel = uiSel;
