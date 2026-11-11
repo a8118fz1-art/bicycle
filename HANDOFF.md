@@ -42,7 +42,7 @@
 - **證據**：11/06 用 USB-TTL 直接監聽下控 TX 兩次共 77 分鐘（`tools/status_sniffer.html`），9.86 Hz、無空窗。11/11 FW 0.16U 診斷記錄：161 次 LINK LOST 的 gap 全部是溢位值，同時每 10 秒都收到約 100 包、CRC 錯誤 0。
 - **修正（0.17）**：先 `pumpEms()`、`scanButtons()` 再取 `now`；斷線、ACK 逾時、目標值節流都改有號比較。驗證：UNO 15 分鐘、Mega 19 分鐘待機，LINK LOST 0 次（Mega 記錄：`tools/reports/head_unit_20261111_1030.csv`）。**有踩踏的還沒錄。**
 - **診斷行保留**：每 10 秒一行 `E,<ms>,DIAG10 ...`，真的 LINK LOST 時多一行 `DIAG LOST`（b = bytes、fr = 封包、crc/len/eof = 丟掉的、pg = 最久幾 ms 沒讀串口、lp = 主迴圈最長、full = 緩衝滿次數）。記錄頁把 DIAG 行寫進 CSV 但不放進狀態檔（否則會把 PLAN DONE 擠出最近 30 筆）。
-- **連帶影響**：① 以前每次假 LINK LOST 會暫停序列計時約 0.1 秒，所以舊記錄的序列實際比標稱長約 1～3%；0.17 起等於標稱。② 假 LINK UP 每次都重問 VERSION / SYSTEM_INFO，0.17 只在開機問一次、VIN 不再更新 → **0.18 補上每 5 秒重問 SYSTEM_INFO**（0.18 編譯通過，尚未實機驗證）。③ plans.json 的 fw_version 改成 0.18M，**功率機電腦上的小程式資料夾要一起換**。
+- **連帶影響**：① 以前每次假 LINK LOST 會暫停序列計時約 0.1 秒，所以舊記錄的序列實際比標稱長約 1～3%；0.17 起等於標稱。② 假 LINK UP 每次都重問 VERSION / SYSTEM_INFO，0.17 只在開機問一次、VIN 不再更新 → **0.18 補上每 5 秒重問 SYSTEM_INFO**（0.18M 已實機驗證：11/11 待機 16 分鐘，LINK LOST 0 次、VIN 約每 5 秒一筆，`tools/reports/head_unit_20261111_1106.csv`）。③ plans.json 的 fw_version 改成 0.18M，**功率機電腦上的小程式資料夾要一起換**。
 - **餘裕偏小（未處理）**：OLED 重繪時最久 29 ms 才讀一次串口，Mega 硬體緩衝約 33 ms 滿（19 分鐘滿 1 次、沒掉包）；UNO 15 分鐘掉過 1 包。之後可在重繪迴圈多呼叫幾次 `pumpEms()`。
 - **文件更正**：上控規格 v12（`Downloads\上控廠商資料_修訂_20261111_v12.xlsx`）與測試模式說明 PDF 20261111，把「下控約每 7 s 有 1.1 s 空窗」改掉（SAMPLES 正常 47～50、固定 0.1 s 少算約 1.4%）；規則本身不變。下控後續信不要再列 STATUS 空窗。
 - 另一件未解：11/06 接 USB-TTL 監聽時 Mega 幾乎完全收不到（link=0），沒接 TTL 就正常，推測是模組並聯在 D19 上的影響，未再驗證。
