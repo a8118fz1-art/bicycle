@@ -171,8 +171,19 @@ function push(fields) {
   paintStats();
 }
 
+/* 序列埠偶爾掉位元組、兩行黏成一行（欄數變多、數字錯位，例如 plan=300）。
+   S 行只收欄數剛好、每欄都是數字、plan / sel 在已知範圍內的；其他丟掉，不寫 CSV、不進狀態檔。 */
+let badLines = 0;
+function sLineOk(p) {
+  if (p.length !== 13 && p.length !== 20 && p.length !== 21) return false;
+  for (let i = 1; i < p.length; i++) if (p[i].trim() === '' || !Number.isFinite(Number(p[i]))) return false;
+  const okPlan = i => p.length <= i || (Number.isInteger(Number(p[i])) && Number(p[i]) >= 0 && Number(p[i]) < PLAN_NAME.length);
+  return okPlan(13) && okPlan(20);
+}
+
 function handleLine(line) {
   const p = line.split(',');
+  if (p[0] === 'S' && !sLineOk(p)) { badLines++; return; }
   if (p[0] === 'S' && p.length >= 13) {
     const [, ms, rpm, watt, ma, dx10, tgt, target, mode, flags, err, link, vinMv] = p.map(Number);
     const cad = rpm / RATIO;
@@ -231,7 +242,8 @@ function paintStats() {
   if (!n) { $('stats').textContent = '尚無紀錄'; return; }
   const first = rows[0].split(',')[0], last = rows[n-1].split(',')[0];
   const nS = rows.filter(r => r.split(',')[2] === 'S').length;
-  $('stats').textContent = `${n} 筆（遙測 ${nS}）　${first.slice(11, 19)} → ${last.slice(11, 19)}`;
+  $('stats').textContent = `${n} 筆（遙測 ${nS}）　${first.slice(11, 19)} → ${last.slice(11, 19)}`
+                         + (badLines ? `　丟掉黏行 ${badLines}` : '');
   $('btnSave').disabled = false;
   $('btnClear').disabled = false;
 }
@@ -274,7 +286,9 @@ async function openPort() {
   let picked = null;
   try {
     picked = await navigator.serial.requestPort();
-    await picked.open({ baudRate: 115200 });
+    /* bufferSize 預設只有 255 bytes（115200 下約 22 ms）：分頁在背景或正在寫狀態檔時來不及讀，
+       位元組被丟掉、換行跟著掉 → 兩行黏成一行（2026-10-29 60B 小程式因此誤停）。開到 1 MB。 */
+    await picked.open({ baudRate: 115200, bufferSize: 1 << 20 });
     port = picked;
     log('串口已開啟 @ 115200。Nano 正在重開，約 2 秒後開始收到資料。');
     $('btnOpen').disabled = true; $('btnClose').disabled = false; $('btnMark').disabled = false;
@@ -360,6 +374,8 @@ function statusOnS(p) {
   if (key !== st.grpKey) { st.grpKey = key; st.grpSincePc = Date.now(); }
 }
 function statusOnE(ms, msg) {
+  /* FW 0.16M 的接收診斷行（DIAG10 / DIAG LOST）只進 CSV，不進狀態檔：每 10 秒一行會把 PLAN DONE 擠出最近 30 筆，dyno_f1timer 就看不到 */
+  if (/^DIAG/.test(msg)) return;
   st.events.push({ nano_ms: ms, pc_ms: Date.now(), msg });
   if (st.events.length > 30) st.events.shift();
   const m = /^BOOT FW (\S+)/.exec(msg);

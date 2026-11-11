@@ -69,15 +69,23 @@ def read_tst(path):
     return t0, segs
 
 def read_head(path):
-    S, E = [], []
+    S, E, bad = [], [], 0
     for r in csv.DictReader(open(path, encoding='utf-8-sig')):
         t = int(r['pc_epoch_ms']) / 1000.0
         if r['type'] == 'S':
-            S.append((t, float(r['flywheel_rpm']), float(r['cadence']), float(r['duty_pct']),
-                      float(r['current_ma']), float(r['pwr_w']), int(r['link']),
-                      float(r['vin_v']) if r['vin_v'] else None))
+            try:   # 序列埠偶爾把兩行黏在一起，欄位錯位的整列略過
+                row = (t, float(r['flywheel_rpm']), float(r['cadence']), float(r['duty_pct']),
+                       float(r['current_ma']), float(r['pwr_w']), int(r['link']),
+                       float(r['vin_v']) if r['vin_v'] else None)
+                if any(v != v for v in row[1:6]) or (row[7] is not None and row[7] != row[7]):
+                    raise ValueError
+                S.append(row)
+            except (ValueError, TypeError):
+                bad += 1
         elif r['type'] in ('E', 'M'):
             E.append((t, r['type'], r['note']))
+    if bad:
+        print(f'　　　　略過 {bad} 列欄位錯位的遙測')
     return S, E
 
 def interp(series, t):
@@ -254,8 +262,11 @@ def main():
                 hsd = statistics.pstdev(s[4] for s in hs) if len(hs) > 1 else float('nan')
                 ok = '✔' if (sd <= STABLE_STD and ks >= MIN_KEEP_S) else '請重測'
                 vins = [s[7] for s in S if ta - 5 <= s[0] <= tb and s[7]]   # VIN 只在 LINK UP 後更新，往前多看 5 秒
-                if vins and min(vins) < VIN_MIN:
-                    ok = f'電源掉壓 {min(vins):.1f}V'
+                # 只有 1 筆偏低是 USB 序列掉字（10/22 新板 60A2 單筆 0.60 / 0.00 / NaN，前後都是 24.7 V）；
+                # 真的掉壓時 VIN 會黏在低值好幾筆（只在 LINK UP 後更新）
+                low = [v for v in vins if v == v and v < VIN_MIN]
+                if len(low) >= 2:
+                    ok = f'電源掉壓 {min(low):.1f}V'
                 rows.append(dict(file=os.path.basename(tst), seg=i, n=k, duty=d, rpm=round(statistics.mean(rp), 3),
                                     torque=round(statistics.mean(tq), 4), power=round(statistics.mean(pw), 2),
                                     torque_sd=round(sd, 4), keep_s=round(ks, 1),
@@ -275,7 +286,8 @@ def main():
             print('  #  duty%  轉速    扭力     功率    扭力σ  有效秒  手把踏頻  電流mA ±σ    淨扭力  模型淨扭力   差    判定')
             for r in rows:
                 net = mod = dif = None
-                if tare and r['duty'] > 0:
+                # duty 平均可能是 0.0x（切換瞬間混進來），模型在 duty < 1.54 為 0，不比對
+                if tare and model_net(r['duty'], r['rpm']) > 0:
                     net = r['torque'] - tare(r['rpm'])
                     mod = model_net(r['duty'], r['rpm'])
                     dif = (net / mod - 1) * 100

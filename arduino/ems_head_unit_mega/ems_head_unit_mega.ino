@@ -5,8 +5,9 @@
     功能、按鍵、遙測格式以 Nano 版 FW 0.7 為基礎（0.8M 起 Mega 版另加功能，見 FW_VERSION 註解），只有硬體相關的三處不同：
       1. 下控 UART 改用硬體 Serial1（RX1 = D19、TX1 = D18），不用 AltSoftSerial
       2. OLED I2C 在 Mega 上是 D20 = SDA、D21 = SCL（不是 A4 / A5）
-      3. FW_VERSION 標 "0.14M"，回報問題時分得出是哪一版
-    之後改 Nano 版時，這份要跟著改；換回 Nano 後這份可以刪掉。
+      3. FW_VERSION 標 "0.15M"，回報問題時分得出是哪一版
+    同一份也能燒 UNO R3 / Nano（328P），版本顯示 "0.15U"；接線跟 Nano 版一樣（D8/D9、A4/A5），見下方 Nano 版說明。
+    Nano 版 ems_head_unit.ino（0.7）已不再維護，328P 板子也燒這份。
 
   ── 以下為原 Nano 版說明 ──
 
@@ -51,13 +52,21 @@
 
 #include <Wire.h>
 #include <U8g2lib.h>
-#if !defined(__AVR_ATmega2560__)
-#error "這份是 Mega 2560 版；Nano 請用 arduino/ems_head_unit/ems_head_unit.ino"
+/* 同一份原始碼也能燒 UNO R3 / Nano（ATmega328P，2026-11-03 給廠商的第二套）：
+   下控改走 AltSoftSerial（D8 = RX、D9 = TX，固定腳位），OLED 走 A4 / A5，按鍵腳位不變。
+   版本字尾 M = Mega、U = 328P，回報問題時分得出是哪一塊板子。 */
+#if defined(__AVR_ATmega2560__)
+#define FW_BOARD           "M"
+#elif defined(__AVR_ATmega328P__)
+#include <AltSoftSerial.h>
+#define FW_BOARD           "U"
+#else
+#error "只支援 Mega 2560 與 ATmega328P（UNO R3 / Nano）"
 #endif
 #include <stdarg.h>
 
 /* ==================== 設定 ==================== */
-#define FW_VERSION         "0.14M"  // 顯示在待機畫面上，回報問題時用來對版本；0.8M 加 SLOWDN / ZDWELL；
+#define FW_VERSION "0.18" FW_BOARD  // 顯示在待機畫面上，回報問題時用來對版本；0.8M 加 SLOWDN / ZDWELL；
                                    // 0.9M：斷線逾時自動中止＋歸零、SET_CONTROL 收 ACK 才算數、SEQ DONE 自動 STOP、序列不受按鍵擋推送
                                    // 0.10M：SET 0 失敗仍送 STOP、BAD_STATE / 已停止就結束歸零、RX 斷時盲送 STOP、斷線暫停計時
                                    // 0.11M：串接計畫 60A / 60B / COMP（段間休息 300 s、對齊功率機的組）、遙測 S 行加 plan 欄位
@@ -66,6 +75,10 @@
                                    //        修正 LINK LOST 會把短暫歸零提早取消（10/19 60B DIP5 只歸零 ~1 s）
                                    // 0.13M：90 rpm 專用 SEQ19～22（最高 80%、每步 25 秒）與計畫 C90A / C90B
                                    // 0.14M：120 rpm 專用 SEQ23 UP0-50 與計畫 C120（UP0-50, DN40Q）
+                                   // 0.15M：SEQ24 CAL50（VR1 校正確認：0→50 停 30 s、歸零 60 s × 3）
+                                   // 0.16M：接收診斷 —— 每 10 s 一行 DIAG10、LINK LOST 當下一行 DIAG LOST（E 行）
+                                   // 0.17M：修正假的 LINK LOST（now 比 lastRxAt 早取 → 無號相減溢位）；ACK 逾時、目標值節流同樣改有號比較
+                                   // 0.18M：每 5 秒重問 SYSTEM_INFO，VIN 才會持續更新（以前靠假 LINK UP 順便問）
 #define EMS_BAUD          19200   // 通訊協定 §2
 #define TELEM_BAUD       115200   // D0/D1 遙測輸出速率
 #define OLED_ADDR          0x3C
@@ -75,12 +88,13 @@
 #define LINK_TIMEOUT_MS    1000   // 下控 STATUS 週期 100ms，1 秒沒收到視為斷線
 #define TGT_PUSH_MS         250   // 目標值連續調整時的送出節流
 #define TGT_SET_RETRY         3   // SET_CONTROL 沒收到 ACK 時最多補送幾次
-/* 序列跑著時鏈路連續中斷超過這麼久就中止序列並歸零。下控已知每 ~6.5 秒有一次
-   約 1.1 秒的 STATUS 空窗（HANDOFF §LINK LOST），5 秒是它的 4 倍以上，不會被誤觸；
+/* 序列跑著時鏈路連續中斷超過這麼久就中止序列並歸零。（0.17M 更正：以前以為下控
+   每 ~6.5 秒有一次 STATUS 空窗，其實是本韌體誤判，見 loop() 開頭。）5 秒遠大於 STATUS 週期 0.1 秒，不會被誤觸；
    又短於一個量測點 30～40 秒，真斷線時不會在錯的 duty 上停太久。 */
 #define SEQ_LINK_ABORT_MS  5000
 #define ZERO_RETRY_MS      1000   // 保證歸零：沒成功就每隔這麼久重來一次（SET 0 → STOP），直到成功
 #define OLED_REFRESH_MS     150
+#define VIN_POLL_MS        5000   // 0.18M：定時重問 SYSTEM_INFO（VIN）
 #define TELEMETRY_MS        500   // ASCII 遙測週期，設 0 關閉
 /*
   設 1 之後，每收到一筆 STATUS_REPORT 就從 D0/D1 吐一行 "R,<millis>,<rpm>"（10Hz）。
@@ -118,7 +132,13 @@ static const uint8_t PIN_BTN[4] = { 6, 7, 2, 4 };   // 依序對應 ↓ ↑ * #�
 
 /* Mega：下控走硬體 Serial1 —— D19 = RX1 ← 下控 TX，D18 = TX1 → 下控 RX。
    硬體 UART 的 RX 緩衝 64 bytes、由中斷收，比 AltSoftSerial 穩，pumpEms() 照舊呼叫即可。 */
+#if defined(__AVR_ATmega2560__)
 HardwareSerial &ems = Serial1;
+#else
+/* 328P：AltSoftSerial 的 RX 緩衝 80 bytes，約 4 包 STATUS（0.38 秒）。
+   OLED 重繪中間有呼叫 pumpEms()，不會放著不收超過 40 ms。 */
+AltSoftSerial ems;   // 固定 D8 = RX ← 下控 TX、D9 = TX → 下控 RX
+#endif
 U8G2_SSD1306_128X64_NONAME_1_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);  // _1_ = 分頁模式，只吃 128B
 
 /* ==================== 協定常數 ==================== */
@@ -368,6 +388,11 @@ static constexpr SeqStep SQS_D40Q[] PROGMEM = {  // 從 40 往下（165 秒）
    冷機最高紀錄 1748 W，全範圍做不到；50% 約 1.28 kW、只停 25 秒。50% 以上用 90 rpm 的高 duty 補。 */
 static constexpr SeqStep SQS_U50Q[] PROGMEM = {  // 上升到 50（190 秒）
   {0,25,0},{100,40,0},{200,25,0},{300,25,0},{400,25,0},{500,25,0},{0,25,0} };
+/* 0.15M：VR1 校正確認（2026-10-22 改標準：60 rpm、duty 50 = 600 W ±1%，取代 duty 100 = 1000 W）。
+   每次都從 0 直接上 50（不從高往下降，避開磁滯），停 30 秒取 15～30 秒的讀值，歸零 60 秒，共 3 次。
+   全長 300 秒，功率機一組就錄得完（F2 → 穩定後 F1 + * → SEQ DONE 後 F1）。 */
+static constexpr SeqStep SQS_CAL50[] PROGMEM = {
+  {0,30,0},{500,30,0},{0,60,0},{500,30,0},{0,60,0},{500,30,0},{0,60,0} };
 
 struct SeqDef { const char *name; const SeqStep *steps; uint8_t n; };
 static const char SN1[]  PROGMEM = "REST5";  static const char SN2[]  PROGMEM = "HOLD5";
@@ -381,7 +406,7 @@ static const char SN15[] PROGMEM = "DIP2";   static const char SN16[] PROGMEM = 
 static const char SN17[] PROGMEM = "SLOWDN"; static const char SN18[] PROGMEM = "ZDWELL";
 static const char SN19[] PROGMEM = "UP0-80"; static const char SN20[] PROGMEM = "DN80Q";
 static const char SN21[] PROGMEM = "DN60Q";  static const char SN22[] PROGMEM = "DN40Q";
-static const char SN23[] PROGMEM = "UP0-50";
+static const char SN23[] PROGMEM = "UP0-50"; static const char SN24[] PROGMEM = "CAL50";
 #define SQN(a) (uint8_t)(sizeof(a) / sizeof(a[0]))
 #define SQ(n, a) { n, a, SQN(a) }
 static constexpr SeqDef SEQS[] PROGMEM = {
@@ -391,7 +416,7 @@ static constexpr SeqDef SEQS[] PROGMEM = {
   SQ(SN13, SQS_DP05), SQ(SN14, SQS_DP1), SQ(SN15, SQS_DP2), SQ(SN16, SQS_DP5),
   SQ(SN17, SQS_SLOW), SQ(SN18, SQS_ZDWL),
   SQ(SN19, SQS_U80Q), SQ(SN20, SQS_D80Q), SQ(SN21, SQS_D60Q), SQ(SN22, SQS_D40Q),
-  SQ(SN23, SQS_U50Q) };
+  SQ(SN23, SQS_U50Q), SQ(SN24, SQS_CAL50) };
 #define SEQ_N SQN(SEQS)
 
 /* ==================== 串接計畫（0.11M） ====================
@@ -735,8 +760,29 @@ static struct {
 
 static uint16_t crcErrCnt = 0;
 
+/* ---- 0.16M 接收診斷 ----
+   找「固定幾秒一次 LINK LOST」到底是哪一段沒收到：
+     b    = 這段時間從 UART 讀到的 byte 數（下控 10 Hz × 21 B ≈ 210 B/s）
+     fr   = 解出來的完整封包數；crc / len / eof = 三種被丟掉的封包
+     pg   = 兩次 pumpEms() 之間最長隔多久（ms）；> 30 ms 硬體緩衝就可能滿
+     lp   = 主迴圈單圈最長多久（ms）；full = 讀的時候緩衝已滿幾次（= 已經掉 byte）
+   判讀：LOST 時 b ≈ 0 → 線上真的沒東西進來（接線／電位）；b 有但 fr 沒有 → 收到亂碼；
+         pg / lp 大或 full > 0 → 我們的程式卡住沒去收（韌體問題）。 */
+#if defined(__AVR_ATmega2560__)
+#define EMS_RXBUF 64
+#else
+#define EMS_RXBUF 80
+#endif
+#define DIAG_MS 10000UL
+static struct {
+  uint16_t bytes, frames, crc, len, eof, full, pumpGap, loopMax;
+} dg;
+static uint16_t dgSinceFrame = 0;     // 上一個好封包之後又讀到幾個 byte
+static uint32_t dgLastPump = 0;
+
 static void onFrame(uint8_t cmd, const uint8_t *d, uint8_t n) {
   lastRxAt = millis();
+  dg.frames++; dgSinceFrame = 0;
   if (!linkAlive) { linkAlive = true; sysStep = 0; sysRetry = 0; setMsgP(M_UP); }
 
   if (cmd == CMD_STATUS_REPORT && n >= 13) {
@@ -816,7 +862,7 @@ static void feed(uint8_t b) {
       else                rx.state = S_SOF1;
       break;
     case S_LEN:
-      if (b == 0 || b > RX_MAX - 1) { rx.state = S_SOF1; break; }
+      if (b == 0 || b > RX_MAX - 1) { rx.state = S_SOF1; dg.len++; break; }
       rx.len = b; rx.buf[0] = b; rx.idx = 1; rx.state = S_PAYLOAD;
       break;
     case S_PAYLOAD:
@@ -829,8 +875,8 @@ static void feed(uint8_t b) {
       if (b == 0x0D) {
         if (crc16ccitt(rx.buf, (uint8_t)(1 + rx.len)) == rx.crcRx)
           onFrame(rx.buf[1], &rx.buf[2], (uint8_t)(rx.len - 1));
-        else crcErrCnt++;
-      }
+        else { crcErrCnt++; dg.crc++; }
+      } else dg.eof++;
       rx.state = S_SOF1;
       break;
   }
@@ -840,7 +886,32 @@ static void feed(uint8_t b) {
    下控每 100ms 丟 21 bytes，AltSoftSerial 的 RX 緩衝 80 bytes，
    只要別停下來超過 ~40ms 就不會掉。 */
 static void pumpEms() {
-  while (ems.available()) feed((uint8_t)ems.read());
+  uint32_t t = millis();
+  if (dgLastPump) { uint16_t g = (uint16_t)min(t - dgLastPump, 60000UL); if (g > dg.pumpGap) dg.pumpGap = g; }
+  dgLastPump = t;
+  if (ems.available() >= EMS_RXBUF - 1) dg.full++;
+  while (ems.available()) {
+    dg.bytes++; if (dgSinceFrame < 0xFFFF) dgSinceFrame++;   // 先加再 feed：收完整包時 onFrame 會歸零
+    feed((uint8_t)ems.read());
+  }
+}
+
+/* 直接寫成 E 行，不經過 msg（不佔 OLED 那一行）。記錄頁照一般事件存進 CSV */
+static void diagEmit(PGM_P tag, uint32_t now) {
+#if TELEMETRY_MS
+  Serial.print(F("E,")); Serial.print(now); Serial.print(',');
+  Serial.print((const __FlashStringHelper *)tag);
+  if (lastRxAt) { Serial.print(F(" gap=")); Serial.print((int32_t)(now - lastRxAt)); }
+  Serial.print(F(" since=")); Serial.print(dgSinceFrame);
+  Serial.print(F(" b="));    Serial.print(dg.bytes);
+  Serial.print(F(" fr="));   Serial.print(dg.frames);
+  Serial.print(F(" crc="));  Serial.print(dg.crc);
+  Serial.print(F(" len="));  Serial.print(dg.len);
+  Serial.print(F(" eof="));  Serial.print(dg.eof);
+  Serial.print(F(" pg="));   Serial.print(dg.pumpGap);
+  Serial.print(F(" lp="));   Serial.print(dg.loopMax);
+  Serial.print(F(" full=")); Serial.println(dg.full);
+#endif
 }
 
 /* ==================== 按鍵 ==================== */
@@ -1009,7 +1080,7 @@ static void planStart(uint8_t p) {
 static void seqTick(uint32_t now) {
   if (!seqActive) return;
   if (!linkAlive) {
-    /* LINK LOST 一下就回來（下控每 ~6.5 秒一次、約 1.1 秒）：不中止也不前進。
+    /* LINK LOST 一下就回來：不中止也不前進。（0.17M 前每幾秒一次的 LINK LOST 是誤判，已修；這裡留給真的短暫斷線）
        0.9M：連續斷超過 SEQ_LINK_ABORT_MS 就中止並排保證歸零，不再停在當下 duty。 */
     if (!seqLinkDownAt) seqLinkDownAt = now;              // 0.10M：從判定斷線那一刻起暫停這一步的計時
     if ((int32_t)(now - lastRxAt) > (int32_t)SEQ_LINK_ABORT_MS) {
@@ -1253,11 +1324,27 @@ void setup() {
   render();
 }
 
-void loop() {
-  uint32_t now = millis();
+static const char M_DG10[]  PROGMEM = "DIAG10";
+static const char M_DGLOST[] PROGMEM = "DIAG LOST";
 
+void loop() {
+  /* 0.17M：先收封包、掃按鍵，再取 now。原本 now 先取，pumpEms() 裡 onFrame 記的
+     lastRxAt = millis() 可能比 now 晚 1～5 ms，下面的無號相減 now - lastRxAt 就溢位成
+     42 億 → 誤判 LINK LOST（下一包 0.1 s 後進來又 LINK UP）。11/11 UNO 實測 161 次 LINK LOST
+     全部是這個原因，下控並沒有停送。 */
   pumpEms();
   scanButtons();
+  uint32_t now = millis();
+
+  /* 0.16M 接收診斷：單圈耗時 + 每 10 秒一行統計 */
+  static uint32_t prevLoop = 0, lastDiag = 0;
+  if (prevLoop) { uint16_t l = (uint16_t)min(now - prevLoop, 60000UL); if (l > dg.loopMax) dg.loopMax = l; }
+  prevLoop = now;
+  if (now - lastDiag >= DIAG_MS) {
+    diagEmit(M_DG10, now);
+    lastDiag = now;
+    memset(&dg, 0, sizeof(dg));
+  }
 
   /* ---- 心跳 ---- */
   if (now - lastHbAt >= HEARTBEAT_MS) {
@@ -1266,7 +1353,7 @@ void loop() {
   }
 
   /* ---- ACK 逾時 ---- */
-  if (pendCmd && (now - pendAt) > ACK_TIMEOUT_MS) {
+  if (pendCmd && (int32_t)(now - pendAt) > (int32_t)ACK_TIMEOUT_MS) {   // 有號：pendAt 可能比這一圈的 now 晚
     char cn[8];
     cmdName(cn, sizeof(cn), pendCmd);
     setMsgF(PSTR("ACK TIMEOUT %s"), cn);
@@ -1294,14 +1381,20 @@ void loop() {
 ackTimeoutDone:
 
   /* ---- 鏈路看門狗 ---- */
-  if (linkAlive && lastRxAt && (now - lastRxAt) > LINK_TIMEOUT_MS) {
+  if (linkAlive && lastRxAt && (int32_t)(now - lastRxAt) > (int32_t)LINK_TIMEOUT_MS) {   // 有號，理由見 loop() 開頭
     linkAlive = false;
     setMsgP(M_LOST);
+    diagEmit(M_DGLOST, now);     // 0.16M：斷線當下這 10 秒窗內收了什麼
   }
 
   /* ---- §14 開機查詢：HEARTBEAT → GET_VERSION → GET_SYSTEM_INFO ----
      這兩個指令不回 ACK 而是直接回資料包，所以不能走 sendAwait，
      自己管重試。鏈路一活過來就問，問三次還沒回就放棄，不影響主功能。 */
+  /* 0.18M：每 VIN_POLL_MS 重問一次 SYSTEM_INFO。0.16M 以前是靠假的 LINK UP（每幾秒一次）順便重問，
+     VIN 才會一直更新；0.17M 修掉假斷線後 VIN 只剩開機那一筆，align_dyno 的掉壓判定就沒資料了。 */
+  static uint32_t lastVinPoll = 0;
+  if (linkAlive && sysStep >= 4 && (now - lastVinPoll) >= VIN_POLL_MS) { lastVinPoll = now; sysStep = 2; sysRetry = 0; }
+
   if (linkAlive && sysStep < 4 && seq == SQ_NONE && !pendCmd) {
     if (sysStep == 0)      { sendCmd(CMD_GET_VERSION,     NULL, 0); sysStep = 1; sysAt = now; }
     else if (sysStep == 2) { sendCmd(CMD_GET_SYSTEM_INFO, NULL, 0); sysStep = 3; sysAt = now; }
@@ -1399,7 +1492,7 @@ ackTimeoutDone:
 
   /* ---- 短暫歸零 ---- 歸零期間擋住一般推送，時間到才把 target 送回去 */
   /* 0.12M：只有「鏈路活著、下控確認不在 RUNNING」才取消歸零。原本 !confirmedRunning() 在 LINK LOST
-     （約每 7 秒一次、每次 ~0.1 s）時也成立 —— 10/19 60B 的 DIP5 在歸零 0.9 s 時碰上 LINK LOST，
+     （當時約每 7 秒一次、每次 ~0.1 s，0.17M 查明是誤判）時也成立 —— 10/19 60B 的 DIP5 在歸零 0.9 s 時碰上 LINK LOST，
      歸零被取消、序列補推 30%，實際只歸零約 1 秒，那一段數據作廢。 */
   if (dipPhase && linkAlive && !confirmedRunning()) dipPhase = 0;      // 真的停了就不用回復
   if (dipPhase == 1 && seq == SQ_NONE && !pendCmd) {
@@ -1416,7 +1509,7 @@ ackTimeoutDone:
   if (tgtDirty && !dipPhase && !zeroPending) {
     if (!confirmedRunning()) {
       tgtDirty = false;             // 沒在跑就只改本地設定值，按 START 時才一起送出
-    } else if (!dutyHeld && seq == SQ_NONE && !pendCmd && (now - tgtDirtyAt) >= TGT_PUSH_MS) {
+    } else if (!dutyHeld && seq == SQ_NONE && !pendCmd && (int32_t)(now - tgtDirtyAt) >= (int32_t)TGT_PUSH_MS) {
       tgtDirty = false;
       if (mode == MODE_DUTY && dipAuto && target < lastSent) {
         dipPhase = 1; dipRetry = 0;                       // 往下調：先歸零，時間到再送 target

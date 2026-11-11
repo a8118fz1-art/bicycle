@@ -5,7 +5,8 @@
 功率機只認 F1（每下 = 下一組，按滿 N 下自己停，組長不影響換組）。F2 = 第 1 組（穩定組）→ 穩定後操作員在
 「功率機視窗」按第一下 F1 = t0（功率機第 2 組），3 秒內在 Mega 按 * → 之後只看狀態檔的 Mega 組號與換組時刻：
 在 Mega 每一組結束（= 下一組開始）前 3 s 送 1 下 F1，最後一組在 PLAN DONE 時送最後 1 下（第 N 下）。
-狀態檔停更不停止：等恢復，缺幾下補幾下（每下重讀，不多送）。只送 F1；其他異常 → 停止自動。
+v3（10/22）：照紀錄跑、不自己中斷 —— 按鍵、手動 F1、前景被搶、視窗暫失、跳組都照 Mega 對帳續跑；
+只有 Mega 自己結束計畫或操作員連按 3 下 Esc 才停。只送 F1，絕不送到功率機以外的視窗。
 
   python dyno_f1timer.py --plan 60A1           正式
   python dyno_f1timer.py --plan 60B --dry-run  演練：按 Enter 當 t0，照 PC 時間表倒數，不送鍵、不切視窗
@@ -29,6 +30,13 @@ F1_LEAD_S = 3.0          # 在 Mega 每組結束（= 下一組開始）前幾秒
 CATCHUP_GAP_S = 1.5      # 狀態檔停更恢復後補送 F1 之間的間隔（每下送前重讀狀態檔）
 ACT_EARLY_S = 8.0        # 送 F1 前幾秒先把功率機切到前景
 BAD_EVENT = re.compile(r"ABORT|LATE|NOT RUN|BOOT")
+# v3（2026-10-22）：「照紀錄跑、不自己中斷」。F1 的下數一律由 Mega 狀態檔決定：
+#   已送下數 = 程式送的 + 操作員在功率機視窗上手動按的 F1；應送下數 = Mega 走到哪裡。
+#   少了就補、多了就等，絕不把 F1 送到功率機以外的視窗。只有 Mega 自己結束計畫（DONE / ABORT / 重開）才停。
+VK_ESC = 0x1B
+ESC_STOP_N, ESC_STOP_WIN_S = 3, 3.0   # 操作員主動停止：3 秒內連按 3 下 Esc
+WARN_EVERY_S = 5.0                     # 同一種警告最多每 5 秒寫一次 log
+PLAN_GONE_S = 10.0       # v3.1：狀態檔的 plan 連續這麼久都不是本計畫（也沒 PLAN DONE）才算 Mega 結束；單筆異常不算
 # 0.12M：功率機最多 10 組 → 60A、COMP 各拆兩個。順序 = .ino PLANS[] = 記錄頁 PLAN_NAME（load_plan 會核對 plans.json）
 PLAN_IDS = {"60A1": 1, "60A2": 2, "60B": 3, "CMP1": 4, "CMP2": 5, "C90A": 6, "C90B": 7, "C120": 8}   # 0.13M 加 C90A / C90B，0.14M 加 C120
 BAR = "!" * 64
@@ -210,12 +218,23 @@ class Runner:
         self.next_i = 0                # 程式已送幾下 F1（= 下一下要結束的 Mega 組索引，0 起算）
         self.last_f1 = None            # (mono, wall) 最近一次功率機開始一組的時刻
         self.st, self.st_at = None, -1e9
+        self.good_st = None            # v3.1：最近一份欄數正常的狀態（黏行那筆用它代替）
         self.fresh = False             # 最近一次讀到的狀態檔是否新鮮
         self.stale_since = None        # 停更開始的 monotonic（只用來顯示 / log）
         self.base = None               # ARMED 時的 boots / millis_backwards
         self.last_nano = None
         self.seen_events = 0
         self.hwnd = None
+        self.esc_times = []            # v3：Esc 連按停止
+        self.last_warn = {}            # v3：警告節流
+        self.op_count = 0              # v3：操作員手動 F1 計入的下數
+
+    def warn(self, key, msg, now=None):
+        """v3：同一種狀況不洗版，每 WARN_EVERY_S 秒最多記一次。"""
+        now = self.clock() if now is None else now
+        if now - self.last_warn.get(key, -1e9) >= WARN_EVERY_S:
+            self.last_warn[key] = now
+            self.log(f"⚠ {msg}")
 
     # --- 狀態檔 ---
     def _age(self, st):
@@ -244,18 +263,30 @@ class Runner:
             self.stale_since = None
         s = self.st.get("s")
         if not s:
-            raise Halt("狀態檔還沒有 Mega 遙測（S 行）")
+            if self.base is None:
+                raise Halt("狀態檔還沒有 Mega 遙測（S 行）")
+            self.fresh = False                              # v3：計畫中偶爾讀到空的 → 當作停更，不中斷
+            return self.st
         if s.get("ncols", 0) < 21:
-            raise Halt("Mega 遙測沒有 sel 欄：Mega 不是 FW 0.11M 以後的版本（或記錄頁太舊）")
+            if self.base is None:
+                raise Halt("Mega 遙測沒有 sel 欄：Mega 不是 FW 0.11M 以後的版本（或記錄頁太舊）")
+            # v3.1：計畫中出現 = 舊記錄頁把黏行寫進狀態檔；這筆不用，沿用上一份好的
+            self.warn("ncols", f"狀態檔這筆只有 {s.get('ncols')} 欄（黏行），略過")
+            self.st = self.good_st
+            return self.st
         if self.base is not None:
-            if self.st.get("boots", 0) != self.base[0] or self.st.get("millis_backwards", 0) != self.base[1]:
-                raise Halt("Mega 重開了（BOOT / millis 倒退）：計畫已中斷，Mega 開機會自動歸零")
-            if self.last_nano is not None and s["nano_ms"] < self.last_nano:
-                raise Halt("Mega millis 倒退（重開）")
+            # v3.1：只有 BOOT 事件（boots 增加）才算確定重開。millis 倒退、ABORT / LATE 等事件可能是黏行假象，
+            # 只警告；Mega 真的結束計畫時 plan 會一直不是本計畫，run() 等 PLAN_GONE_S 秒後停。
+            if self.st.get("boots", 0) != self.base[0]:
+                raise Halt("Mega 重開了（BOOT）：計畫已中斷，Mega 開機會自動歸零")
+            if (self.st.get("millis_backwards", 0) != self.base[1]
+                    or (self.last_nano is not None and s["nano_ms"] < self.last_nano)):
+                self.warn("millis", "狀態檔的 Mega millis 倒退一次（多半是黏行），沒有 BOOT 事件，繼續")
             self.last_nano = s["nano_ms"]
             for e in self.st.get("events", []):
                 if e.get("pc_ms", 0) / 1000.0 >= self.base[2] and BAD_EVENT.search(e.get("msg", "")):
-                    raise Halt(f"Mega 事件：{e['msg']}")
+                    self.warn("event", f"Mega 事件：{e['msg']}（不停止，照 Mega 狀態跟）")
+        self.good_st = self.st
         return self.st
 
     def stale_line(self, now):
@@ -269,6 +300,8 @@ class Runner:
         return new
 
     def check_keys(self, now):
+        """v3：按鍵不再中斷。F1 按在功率機視窗上 = 功率機真的換組了，計入已送下數；其他鍵只記 log。
+        3 秒內連按 3 下 Esc = 操作員主動停止。"""
         for vk in sorted(self.new_keys()):
             if vk == VK_F1 and now <= self.guard_until:
                 continue                                    # 自己送的 F1
@@ -279,7 +312,24 @@ class Runner:
                 else:
                     self.log(f"SHADOW 按鍵 VK 0x{vk:02X}")
                 continue
-            raise Halt(f"t0 之後偵測到按鍵 VK 0x{vk:02X}（操作員介入）")
+            if vk == VK_ESC:
+                self.esc_times = [t for t in self.esc_times if now - t <= ESC_STOP_WIN_S] + [now]
+                if len(self.esc_times) >= ESC_STOP_N:
+                    raise Halt(f"操作員連按 {ESC_STOP_N} 下 Esc，停止自動送 F1")
+                self.log(f"Esc（再按 {ESC_STOP_N - len(self.esc_times)} 下停止自動送 F1）")
+                continue
+            if vk == VK_F1:
+                if self.ops.foreground() == self.hwnd:
+                    if self.next_i < len(self.groups):
+                        self.next_i += 1; self.op_count += 1
+                        self.last_f1 = (now, self.wall())
+                        self.log(f"操作員在功率機上手動按 F1，已計入（程式這邊算第 {self.next_i}/{len(self.groups)} 下）；之後照 Mega 進度繼續")
+                    else:
+                        self.log("操作員手動按 F1，但程式的 F1 已全部送完（功率機可能多換了一組，請核對畫面）")
+                else:
+                    self.log("F1 按在功率機以外的視窗，功率機不會換組，不計入")
+                continue
+            self.warn(f"key{vk}", f"按鍵 VK 0x{vk:02X}（已忽略，不中斷；要停止請連按 {ESC_STOP_N} 下 Esc）", now)
 
     # --- 開始前檢查（M4、M5） ---
     def preflight(self):
@@ -311,13 +361,17 @@ class Runner:
         """等操作員在功率機視窗上按第一下 F1（背景偵測，不攔截）。按在別的視窗不算（M3）。"""
         self.prev_keys = self.ops.keys_down()
         self.log(f"ARMED 計畫 {self.plan_name}：功率機 F2（第 1 組穩定組）→ 轉速穩定後在【功率機視窗】按第一下 F1（第 2 組），3 秒內在 Mega 按 *")
-        last = -1e9
+        last, changed_since = -1e9, None
         while True:
             now = self.clock()
             self.poll_status(now)
             st = self.st["s"]
             if self.fresh and (st.get("sel") != self.plan_id or st.get("plan") not in (0, self.plan_id)):
-                raise Halt(f"等待期間 Mega 選單／計畫變了（sel={st.get('sel')} plan={st.get('plan')}）")
+                changed_since = now if changed_since is None else changed_since   # v3.1：持續才算，單筆黏行不算
+                if now - changed_since >= PLAN_GONE_S:
+                    raise Halt(f"等待期間 Mega 選單／計畫變了（sel={st.get('sel')} plan={st.get('plan')}）")
+            else:
+                changed_since = None
             new = self.new_keys()
             if VK_F1 in new:
                 if self.ops.foreground() == self.hwnd:
@@ -352,12 +406,22 @@ class Runner:
         return f"程式第 {g['group']}/{len(self.groups)} 下 F1：結束 Mega G{g['group']}{nxt}"
 
     def activate(self, g):
+        """v3：找不到 / 不只一個功率機視窗時不中斷，回 False 等下一輪再試。"""
         tag = self.tag(g)
         hwnds = self.ops.find()
-        if hwnds != [self.hwnd]:
-            raise Halt(f"{tag}：功率機視窗變了（{len(hwnds)} 個），未送 F1")
+        if len(hwnds) != 1:
+            self.warn("win", f"{tag}：符合標題的功率機視窗有 {len(hwnds)} 個，等恢復成 1 個再送（不中斷）")
+            return False
+        if hwnds[0] != self.hwnd:
+            self.log(f"功率機視窗換了（舊 {self.hwnd} → 新 {hwnds[0]}），改用新視窗")
+            self.hwnd = hwnds[0]
         if not self.shadow:                                 # 影子模式不切前景
-            self.ops.activate(self.hwnd)
+            try:
+                self.ops.activate(self.hwnd)
+            except Exception as e:
+                self.warn("act", f"{tag}：切功率機到前景失敗（{type(e).__name__}），稍後再試")
+                return False
+        return True
 
     def fire(self, g, now_sched_info, lag=0.0):
         tag = self.tag(g)
@@ -367,7 +431,8 @@ class Runner:
         if not self.fresh:
             return False                                    # 剛好停更：這次不送，等恢復再判斷（不停止）
         if self.due(st, self.clock())[0] <= self.next_i:
-            raise Halt(f"{tag}：送前重讀狀態檔不符（plan={s.get('plan')} grp={s.get('grp')}），未送 F1")
+            self.warn("recheck", f"{tag}：送前重讀狀態檔，現在還不該送（plan={s.get('plan')} grp={s.get('grp')}），這次不送")
+            return False
         if self.shadow:
             now, noww = self.clock(), self.wall()
             self.would.append((g["group"], now, lag))
@@ -377,11 +442,15 @@ class Runner:
             op = (f"；操作員實際 F1 比這裡{'晚' if recent[-1] >= now else '早'} {abs(recent[-1] - now):.2f} s" if recent else "")
             self.log(f"SHADOW 此時會送 F1 {tag}（{now_sched_info}；前景{'是' if self.ops.foreground() == self.hwnd else '不是'}功率機；未送、未切視窗{op}）")
             return True
-        if self.ops.foreground() != self.hwnd:
-            raise Halt(f"{tag}：前景視窗不是功率機，未送 F1")
+        if self.ops.foreground() != self.hwnd:              # v3：被別的視窗搶走 → 切回去，這次不送、下一輪再送
+            self.warn("fg", f"{tag}：前景視窗不是功率機，切回功率機後再送（不中斷）")
+            self.activate(g)
+            return False
         self.guard_until = self.clock() + INJECT_GUARD_S
         if self.ops.foreground() != self.hwnd:              # 緊接送鍵前再確認一次
-            raise Halt(f"{tag}：前景視窗不是功率機，未送 F1")
+            self.warn("fg", f"{tag}：前景視窗不是功率機，切回功率機後再送（不中斷）")
+            self.activate(g)
+            return False
         self.ops.send_f1()
         now, noww = self.clock(), self.wall()
         self.guard_until = now + INJECT_GUARD_S
@@ -418,7 +487,7 @@ class Runner:
         if self.dry:
             return self._run_dry(t0)
         n = len(self.groups)
-        grp1_ok, stale_seen, activated = False, False, -1
+        grp1_ok, stale_seen, activated, gone_since = False, False, -1, None
         last_send, last_draw = -1e9, -1e9
         while self.next_i < n:
             now = self.clock()
@@ -432,32 +501,48 @@ class Runner:
             s = st["s"]
             plan = s.get("plan")
             done = self._done(st)
-            if not grp1_ok:                                 # Mega G1：F1 後 −1～+6 s 內開始、8 s 內一定要看到
+            # v3.1（2026-10-29）：序列埠黏行會讓記錄頁寫出 plan=300、grp=600 這種值（60B 實機因此誤停）。
+            # 欄位不合理的這一筆直接跳過；plan 合理但不是本計畫，要連續 PLAN_GONE_S 秒才算 Mega 結束。
+            grp = s.get("grp")
+            if (plan not in (0, *PLAN_IDS.values()) or not isinstance(grp, int) or isinstance(grp, bool)
+                    or not 0 <= grp <= n):
+                self.warn("garbled", f"狀態檔這筆欄位不合理（plan={plan} grp={grp}），略過")
+                self.sleep(POLL_S); continue
+            if not grp1_ok:                                 # Mega G1：v3 只警告，不中斷（照 Mega 實際開始的時刻跟）
                 if (plan == self.plan_id and s.get("grp")) or done:
                     if plan == self.plan_id and s.get("grp") == 1 and not stale_seen:
                         rel = st["grp_since_pc_ms"] / 1000.0 - t0w
                         if not STAR_WINDOW[0] <= rel <= STAR_WINDOW[1]:
-                            raise Halt(f"Mega G1 在第一下 F1 後 {rel:+.1f} s 開始（容許 {STAR_WINDOW[0]:+.0f}～{STAR_WINDOW[1]:+.0f} s）")
+                            self.log(f"⚠ Mega G1 在第一下 F1 後 {rel:+.1f} s 才開始（建議 {STAR_WINDOW[0]:+.0f}～{STAR_WINDOW[1]:+.0f} s）；"
+                                     "功率機第 2 組會多錄一段阻力 0，數據仍可用，照 Mega 繼續")
                     grp1_ok = True
-                elif now - t0 > GRP1_TIMEOUT_S:
-                    raise Halt(f"第一下 F1 後 {GRP1_TIMEOUT_S:.0f} s，Mega 還沒進 G1（* 沒按到？）")
                 else:
+                    if now - t0 > GRP1_TIMEOUT_S:
+                        self.warn("g1", f"第一下 F1 後 {now - t0:.0f} s，Mega 還沒進 G1（* 還沒按？）；繼續等，不中斷")
                     self.sleep(POLL_S); continue
             if plan != self.plan_id and not done:
-                raise Halt(f"Mega 計畫已結束或中止（plan={plan}），程式還有 {n - self.next_i} 下 F1 沒送")
+                if gone_since is None:
+                    gone_since = now
+                if now - gone_since < PLAN_GONE_S:
+                    self.warn("gone", f"狀態檔 plan={plan}，不是本計畫；{PLAN_GONE_S:.0f} 秒內恢復就繼續")
+                    self.sleep(POLL_S); continue
+                raise Halt(f"Mega 計畫已結束或中止（plan={plan}，持續 {PLAN_GONE_S:.0f} 秒），沒有紀錄可以跟了；"
+                           f"程式還有 {n - self.next_i} 下 F1 沒送")
+            gone_since = None
             d, cur, rem = self.due(st, now)
             if plan == self.plan_id and s.get("grp"):
                 self.last_grp_st = st                        # 停止後推算手動時刻用
-            if cur and cur <= n and cur < self.next_i:
-                raise Halt(f"Mega 組號倒退：已送到 G{self.next_i} 結束，狀態檔是 G{cur}")
-            if d > self.next_i + 1 and not stale_seen:
-                raise Halt(f"Mega 組號不符：應送 {d} 下、已送 {self.next_i} 下，期間狀態檔沒有停更（不該跳組）")
+            if d < self.next_i:                             # v3：已送比 Mega 多（多半是操作員提早手動按了 F1）→ 等 Mega 追上，不送
+                self.warn("ahead", f"已送 {self.next_i} 下、Mega 目前只需要 {d} 下（有人提早按了 F1？）；等 Mega 追上，這段不送")
+            if d > self.next_i + 1 and not stale_seen:      # v3：跳組 → 照 Mega 補送
+                self.log(f"⚠ Mega 進度比已送多 {d - self.next_i} 下（狀態檔沒停更卻跳組）；照 Mega 補送")
+                stale_seen = True
             g = self.groups[self.next_i]
             if d > self.next_i:
                 if now - last_send < CATCHUP_GAP_S:
                     self.sleep(POLL_S); continue
-                if activated != self.next_i:
-                    self.activate(g); activated = self.next_i
+                if activated != self.next_i and self.activate(g):
+                    activated = self.next_i
                 behind = d - self.next_i - 1
                 info = (f"補送（停更後）：Mega {'PLAN DONE' if done else f'G{cur}'}，還差 {behind} 下" if stale_seen or behind
                         else ("Mega PLAN DONE" if done else f"Mega G{cur} 剩 {rem:.1f} s"))
@@ -465,17 +550,21 @@ class Runner:
                     last_send = self.clock()
                     if behind == 0:
                         stale_seen = False
+                else:
+                    self.sleep(POLL_S)                      # v3：這次沒送（前景被搶、重讀不符…）→ 稍等再試，不空轉
                 continue
             # 還沒到：提早切前景、顯示倒數
             if cur == self.next_i + 1 and rem is not None:
                 left = rem - F1_LEAD_S if cur < n else rem
-                if activated != self.next_i and left <= self.cfg["activate_lead_s"]:
-                    self.activate(g); activated = self.next_i
+                if activated != self.next_i and left <= self.cfg["activate_lead_s"] and self.activate(g):
+                    activated = self.next_i
                 if now - last_draw >= 0.5:
                     last_draw = now
                     what = f"{left:6.1f} s 後送" if cur < n else f"內容剩 {left:6.1f} s，PLAN DONE 時送最後"
                     self.out(f"\rMega G{cur}/{n}{'（HOLD）' if s.get('hold') else ''}｜{what}第 {self.next_i + 1}/{n} 下 F1   ", end="", flush=True)
             self.sleep(POLL_S)
+        if self.op_count:
+            self.log(f"其中 {self.op_count} 下是操作員手動按的（已計入）")
         self.log(f"DONE 程式 {n} 下 F1 全部送完（功率機共 {n + 1} 下，應已自己停）；記錄頁下載 CSV")
 
     def _run_dry(self, t0):
