@@ -306,6 +306,11 @@ TGT 50    ERR 0000
           <td><code>VIN 24.03V E0004</code><br>下控回報的<b>實際供電電壓</b>。判斷電源故障的第一手資料。</td>
         </tr>
         <tr>
+          <td class="k">待機（阻力沒開）<br>且 ERR 為 0</td>
+          <td class="k">第 4 行</td>
+          <td><code>RX 100/10s BAD 0</code><br>FW 0.19 起。<b>RX</b> = 上一個 10 秒收到幾包 STATUS（正常 98～104）；<b>BAD</b> = 開機以來因格式或 CRC 錯誤丟掉幾包（正常 0）。開阻力後這一行變回 <code>TGT … ERR …</code>。</td>
+        </tr>
+        <tr>
           <td class="k">尚未收到任何<br>STATUS_REPORT</td>
           <td class="k">第 2–4 行</td>
           <td><code>waiting for STATUS</code> / <code>CRC ERR 0</code> / <code>FREE RAM 540</code><br>此時可確認本機是否正常運作。<b>FREE RAM 低於 150 請回報</b>。</td>

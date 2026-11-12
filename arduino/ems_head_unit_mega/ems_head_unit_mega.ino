@@ -66,7 +66,7 @@
 #include <stdarg.h>
 
 /* ==================== 設定 ==================== */
-#define FW_VERSION "0.18" FW_BOARD  // 顯示在待機畫面上，回報問題時用來對版本；0.8M 加 SLOWDN / ZDWELL；
+#define FW_VERSION "0.19" FW_BOARD  // 顯示在待機畫面上，回報問題時用來對版本；0.8M 加 SLOWDN / ZDWELL；
                                    // 0.9M：斷線逾時自動中止＋歸零、SET_CONTROL 收 ACK 才算數、SEQ DONE 自動 STOP、序列不受按鍵擋推送
                                    // 0.10M：SET 0 失敗仍送 STOP、BAD_STATE / 已停止就結束歸零、RX 斷時盲送 STOP、斷線暫停計時
                                    // 0.11M：串接計畫 60A / 60B / COMP（段間休息 300 s、對齊功率機的組）、遙測 S 行加 plan 欄位
@@ -79,6 +79,8 @@
                                    // 0.16M：接收診斷 —— 每 10 s 一行 DIAG10、LINK LOST 當下一行 DIAG LOST（E 行）
                                    // 0.17M：修正假的 LINK LOST（now 比 lastRxAt 早取 → 無號相減溢位）；ACK 逾時、目標值節流同樣改有號比較
                                    // 0.18M：每 5 秒重問 SYSTEM_INFO，VIN 才會持續更新（以前靠假 LINK UP 順便問）
+                                   // 0.19M：OLED 改成每圈主迴圈只畫一頁、只畫落在該頁的那幾行（主迴圈 175 ms → 數十 ms 內，
+                                   //        重繪中不再久久才讀一次串口）；待機畫面第 4 行顯示收包統計；定時問 VIN 不蓋掉畫面訊息
 #define EMS_BAUD          19200   // 通訊協定 §2
 #define TELEM_BAUD       115200   // D0/D1 遙測輸出速率
 #define OLED_ADDR          0x3C
@@ -576,6 +578,7 @@ static bool     sysValid = false;
 /* 查詢狀態機：0=待送VER 1=等VER 2=待送INFO 3=等INFO 4=完成或放棄 */
 static uint8_t  sysStep = 0, sysRetry = 0;
 static uint32_t sysAt = 0;
+static bool     sysQuiet = false;   // 0.19M：這次 SYSTEM_INFO 是定時輪詢，結果只寫 E 行、不蓋掉畫面訊息
 
 /* 這次 FAULT 期間是否已經試過 RESET_ERROR。
    試過還清不掉的話，下一次按 START 就直接送 arm 序列 ——
@@ -777,13 +780,15 @@ static uint16_t crcErrCnt = 0;
 static struct {
   uint16_t bytes, frames, crc, len, eof, full, pumpGap, loopMax;
 } dg;
+static uint16_t dgLastFr = 0, dgBadTot = 0;   // 0.19M：上一個 10 秒窗的封包數、開機以來丟掉的封包數（給待機畫面）
+static bool     dgHave = false;
 static uint16_t dgSinceFrame = 0;     // 上一個好封包之後又讀到幾個 byte
 static uint32_t dgLastPump = 0;
 
 static void onFrame(uint8_t cmd, const uint8_t *d, uint8_t n) {
   lastRxAt = millis();
   dg.frames++; dgSinceFrame = 0;
-  if (!linkAlive) { linkAlive = true; sysStep = 0; sysRetry = 0; setMsgP(M_UP); }
+  if (!linkAlive) { linkAlive = true; sysStep = 0; sysRetry = 0; sysQuiet = false; setMsgP(M_UP); }
 
   if (cmd == CMD_STATUS_REPORT && n >= 13) {
     sr.rpm     = rd16(d + 0);
@@ -840,9 +845,15 @@ static void onFrame(uint8_t cmd, const uint8_t *d, uint8_t n) {
     fw[0] = d[2]; fw[1] = d[3]; fw[2] = d[4];
     sysValid = true;
     if (sysStep == 3) { sysStep = 4; sysRetry = 0; }
+    /* 0.19M：定時輪詢的結果照樣吐 E 行（記錄頁要 VIN），但把畫面那一行訊息還原，
+       否則 SEQ DONE 之類的訊息 5 秒內就被 VIN 蓋掉 */
+    char keep[sizeof(msg)];
+    bool quiet = sysQuiet; sysQuiet = false;
+    if (quiet) memcpy(keep, msg, sizeof(msg));
     setMsgF(PSTR("VIN %u.%02uV FW%u.%u.%u"),
             (unsigned)(vinMv / 1000), (unsigned)((vinMv % 1000) / 10),
             (unsigned)fw[0], (unsigned)fw[1], (unsigned)fw[2]);
+    if (quiet) memcpy(msg, keep, sizeof(msg));
     return;
   }
 
@@ -1171,95 +1182,132 @@ static void stateBadge(char *out, uint8_t cap) {
 }
 
 /*
-  先把五行文字全部排好再進分頁迴圈。
+  先把五行文字全部排好（renderBegin）再一頁一頁畫（renderStep）。
   兩個理由：分頁模式下同一畫面會重畫 8 次，在迴圈裡 snprintf 等於算 8 遍；
   而且迴圈中間會呼叫 pumpEms()，全域狀態可能在兩個分頁之間被更新，
   直接讀全域會畫出上下半截不一致的畫面。
 */
-static void render() {
-  char L[5][21];
-  char t[10], mn[6], sb[8];
+/* 0.19M：重繪拆成「每圈主迴圈一頁」。排好的文字放在這裡，8 頁畫完之前不會變。 */
+static struct {
+  char    L[5][21];
+  char    sb[8];
+  int8_t  bx, msgY;
+  bool    trace, active;
+  uint8_t page;
+} rd;
+
+static void renderBegin() {
+  char t[10], mn[6];
 
   copyP(mn, sizeof(mn), (PGM_P)pgm_read_ptr(&MODE_NAME[mode]));
   fmtTarget(t, sizeof(t), target);
-  stateBadge(sb, sizeof(sb));
+  stateBadge(rd.sb, sizeof(rd.sb));
 
   /* 本機設定值與下控實際採用的目標值不同時標 * —— 看得出設定有沒有真的送進去 */
   bool unsent = sr.valid && (sr.tgt != target);
   if (uiSeq && !seqActive && uiSel >= SEQ_N) {           // 0.11M：選單上的計畫
     char nm[8]; uint8_t pi = (uint8_t)(uiSel - SEQ_N);
     copyP(nm, sizeof(nm), (PGM_P)pgm_read_ptr(&PLANS[pi].name));
-    snprintf_P(L[0], sizeof(L[0]), PSTR("PLAN %-4s %uG"), nm,
+    snprintf_P(rd.L[0], sizeof(rd.L[0]), PSTR("PLAN %-4s %uG"), nm,
                (unsigned)(2 * pgm_read_byte(&PLANS[pi].n) - 1));
   } else if (uiSeq && !seqActive) {
     char nm[8];
     copyP(nm, sizeof(nm), (PGM_P)pgm_read_ptr(&SEQS[seqSel].name));
-    snprintf_P(L[0], sizeof(L[0]), PSTR("SEQ%u %-6s"), (unsigned)(seqSel + 1), nm);
+    snprintf_P(rd.L[0], sizeof(rd.L[0]), PSTR("SEQ%u %-6s"), (unsigned)(seqSel + 1), nm);
   } else if (uiSeq && planActive) {
-    snprintf_P(L[0], sizeof(L[0]), PSTR("G%u/%u %-6s%c"), (unsigned)(planGrp + 1), (unsigned)planGroups(),
+    snprintf_P(rd.L[0], sizeof(rd.L[0]), PSTR("G%u/%u %-6s%c"), (unsigned)(planGrp + 1), (unsigned)planGroups(),
                t, unsent ? '*' : ' ');                    // 不顯示 S%u，免得壓到右上徽章
   } else if (uiSeq) {
-    snprintf_P(L[0], sizeof(L[0]), PSTR("S%u %-7s%c"), (unsigned)(seqSel + 1), t, unsent ? '*' : ' ');
+    snprintf_P(rd.L[0], sizeof(rd.L[0]), PSTR("S%u %-7s%c"), (unsigned)(seqSel + 1), t, unsent ? '*' : ' ');
   } else
-  snprintf_P(L[0], sizeof(L[0]), PSTR("%-4s %-7s%c"), mn, t, unsent ? '*' : ' ');
+  snprintf_P(rd.L[0], sizeof(rd.L[0]), PSTR("%-4s %-7s%c"), mn, t, unsent ? '*' : ' ');
 
   if (sr.valid) {
-    snprintf_P(L[1], sizeof(L[1]), PSTR("RPM %4u PWR %4uW"), (unsigned)sr.rpm, (unsigned)sr.watt);
+    snprintf_P(rd.L[1], sizeof(rd.L[1]), PSTR("RPM %4u PWR %4uW"), (unsigned)sr.rpm, (unsigned)sr.watt);
     /* RPM_FAIL 時 DTY / mA 必定是 0，那一行沒有資訊量。
        換成 RPM 的最小-最大與樣本數，把「會飄」變成可以拿去對帳的數字。 */
     if (sr.err & 0x02)
-      snprintf_P(L[2], sizeof(L[2]), PSTR("RPM %u-%u n%lu"),
+      snprintf_P(rd.L[2], sizeof(rd.L[2]), PSTR("RPM %u-%u n%lu"),
                  (unsigned)(rpmSamples ? rpmMin : 0), (unsigned)rpmMax,
                  (unsigned long)rpmSamples);
     else
-      snprintf_P(L[2], sizeof(L[2]), PSTR("DTY %u.%u%% %umA"),
+      snprintf_P(rd.L[2], sizeof(rd.L[2]), PSTR("DTY %u.%u%% %umA"),
                  (unsigned)(sr.dutyX10 / 10), (unsigned)(sr.dutyX10 % 10), (unsigned)sr.mA);
     /* RPM_FAIL 時第 4 行讓位給波形圖，這裡放空字串讓文字迴圈跳過 */
     if (sr.err & 0x02)
-      L[3][0] = 0;
+      rd.L[3][0] = 0;
     /* POWER_FAIL 時把 VIN 換上來 —— 線圈電源電壓是判斷這個錯誤的第一手資料 */
     else if ((sr.err & 0x04) && sysValid)
-      snprintf_P(L[3], sizeof(L[3]), PSTR("VIN %u.%02uV E%04X"),
+      snprintf_P(rd.L[3], sizeof(rd.L[3]), PSTR("VIN %u.%02uV E%04X"),
                  (unsigned)(vinMv / 1000), (unsigned)((vinMv % 1000) / 10), (unsigned)sr.err);
     /* 序列執行中：第 4 行改顯示進度與這一步剩幾秒 */
     else if (planActive && planHold) {                  // 0.11M：等下一組
       int32_t left = (int32_t)(planNextAt - millis()) / 1000;
-      snprintf_P(L[3], sizeof(L[3]), PSTR("HOLD NEXT G %lds"), (long)(left < 0 ? 0 : left));
+      snprintf_P(rd.L[3], sizeof(rd.L[3]), PSTR("HOLD NEXT G %lds"), (long)(left < 0 ? 0 : left));
     }
     else if (seqActive && seqStarted) {
       SeqStep s; seqStepRead(seqIdx, &s);
       uint32_t el = (millis() - seqStepT0) / 1000UL;
       uint16_t left = (el >= s.holdS) ? 0 : (uint16_t)(s.holdS - el);
-      snprintf_P(L[3], sizeof(L[3]), PSTR("STEP %u/%u  %us"),
+      snprintf_P(rd.L[3], sizeof(rd.L[3]), PSTR("STEP %u/%u  %us"),
                  (unsigned)(seqIdx + 1), (unsigned)seqLen(), (unsigned)left);
     }
+    /* 0.19M：待機且沒有錯誤時，第 4 行改顯示收包統計（上一個 10 秒收到幾包 / 開機以來丟掉幾包），
+       不接電腦也看得出通訊正不正常。正常是 RX 98～104、BAD 0。 */
+    else if (dgHave && !sr.err && !confirmedRunning())
+      snprintf_P(rd.L[3], sizeof(rd.L[3]), PSTR("RX %u/10s BAD %u"), (unsigned)dgLastFr, (unsigned)dgBadTot);
     else
-      snprintf_P(L[3], sizeof(L[3]), PSTR("TGT %-5u ERR %04X"),
+      snprintf_P(rd.L[3], sizeof(rd.L[3]), PSTR("TGT %-5u ERR %04X"),
                  (unsigned)sr.tgt, (unsigned)sr.err);
   } else {
     /* 還沒收到下控封包時（上機第一階段），把剩餘 RAM 秀出來當健康檢查 */
-    strcpy_P(L[1], PSTR("waiting for STATUS"));
-    snprintf_P(L[2], sizeof(L[2]), PSTR("FW " FW_VERSION "  CRC ERR %u"), (unsigned)crcErrCnt);
-    snprintf_P(L[3], sizeof(L[3]), PSTR("FREE RAM %u"), (unsigned)ramHeadroom());
+    strcpy_P(rd.L[1], PSTR("waiting for STATUS"));
+    snprintf_P(rd.L[2], sizeof(rd.L[2]), PSTR("FW " FW_VERSION "  CRC ERR %u"), (unsigned)crcErrCnt);
+    snprintf_P(rd.L[3], sizeof(rd.L[3]), PSTR("FREE RAM %u"), (unsigned)ramHeadroom());
   }
 
-  strncpy(L[4], msg, sizeof(L[4]) - 1);
-  L[4][sizeof(L[4]) - 1] = 0;
+  strncpy(rd.L[4], msg, sizeof(rd.L[4]) - 1);
+  rd.L[4][sizeof(rd.L[4]) - 1] = 0;
 
-  int8_t bx = (int8_t)(128 - 6 * (int8_t)strlen(sb));
+  rd.bx = (int8_t)(128 - 6 * (int8_t)strlen(rd.sb));
   /* 有波形時訊息行往下讓，沒有就維持原位 */
-  bool trace = sr.valid && (sr.err & 0x02);
-  int8_t msgY = trace ? 63 : 54;
+  rd.trace = sr.valid && (sr.err & 0x02);
+  rd.msgY = rd.trace ? 63 : 54;
 
+  rd.page = 0;
+  rd.active = true;
   oled.firstPage();
-  do {
-    pumpEms();                       // 重繪期間也要繼續收，否則會掉封包
-    oled.setFont(u8g2_font_6x12_tr);
-    for (uint8_t r = 0; r < 4; r++) if (L[r][0]) line(r, L[r]);
-    oled.drawStr(bx, 10, sb);
-    if (trace) drawTrace(36, 16);
-    if (L[4][0]) { oled.drawStr(0, msgY, ">"); oled.drawStr(8, msgY, L[4]); }
-  } while (oled.nextPage());
+}
+
+/* 這一頁（8 列像素）有沒有碰到第 top～bot 列 */
+static bool rowHit(uint8_t top, uint8_t bot) {
+  uint8_t p0 = (uint8_t)(rd.page * 8);
+  return bot >= p0 && top <= (uint8_t)(p0 + 7);
+}
+/* 6x12 字型：基線 y 的字佔 y−10 ～ y+1 列（字高 12、y 偏移 −2），這裡多留到 y+3 */
+static bool textHit(int8_t y) { return rowHit((uint8_t)(y - 10), (uint8_t)(y + 3)); }
+
+/* 畫一頁、送一頁。每圈主迴圈呼叫一次；一個畫面 8 頁，約 8 圈畫完。 */
+static void renderStep() {
+  if (!rd.active) return;
+  oled.setFont(u8g2_font_6x12_tr);
+  for (uint8_t r = 0; r < 4; r++) {
+    int8_t y = (int8_t)(10 + r * 11);
+    if (rd.L[r][0] && textHit(y)) { line(r, rd.L[r]); pumpEms(); }
+  }
+  if (textHit(10)) oled.drawStr(rd.bx, 10, rd.sb);
+  if (rd.trace && rowHit(36, 52)) drawTrace(36, 16);
+  if (rd.L[4][0] && textHit(rd.msgY)) { oled.drawStr(0, rd.msgY, ">"); oled.drawStr(8, rd.msgY, rd.L[4]); }
+  pumpEms();                         // 送這一頁（I2C）之前先把串口收乾淨
+  if (oled.nextPage()) rd.page++;
+  else                 rd.active = false;
+  pumpEms();
+}
+
+/* 一次畫完整個畫面（只有 setup() 用） */
+static void render() {
+  renderBegin();
+  while (rd.active) renderStep();
 }
 
 /* ==================== ASCII 遙測 ==================== */
@@ -1343,6 +1391,8 @@ void loop() {
   if (now - lastDiag >= DIAG_MS) {
     diagEmit(M_DG10, now);
     lastDiag = now;
+    dgLastFr = dg.frames; dgHave = true;
+    { uint16_t bad = (uint16_t)(dg.crc + dg.len + dg.eof); dgBadTot = (dgBadTot > 0xFFFF - bad) ? 0xFFFF : (uint16_t)(dgBadTot + bad); }
     memset(&dg, 0, sizeof(dg));
   }
 
@@ -1393,7 +1443,7 @@ ackTimeoutDone:
   /* 0.18M：每 VIN_POLL_MS 重問一次 SYSTEM_INFO。0.16M 以前是靠假的 LINK UP（每幾秒一次）順便重問，
      VIN 才會一直更新；0.17M 修掉假斷線後 VIN 只剩開機那一筆，align_dyno 的掉壓判定就沒資料了。 */
   static uint32_t lastVinPoll = 0;
-  if (linkAlive && sysStep >= 4 && (now - lastVinPoll) >= VIN_POLL_MS) { lastVinPoll = now; sysStep = 2; sysRetry = 0; }
+  if (linkAlive && sysStep >= 4 && (now - lastVinPoll) >= VIN_POLL_MS) { lastVinPoll = now; sysStep = 2; sysRetry = 0; sysQuiet = true; }
 
   if (linkAlive && sysStep < 4 && seq == SQ_NONE && !pendCmd) {
     if (sysStep == 0)      { sendCmd(CMD_GET_VERSION,     NULL, 0); sysStep = 1; sysAt = now; }
@@ -1534,7 +1584,9 @@ ackTimeoutDone:
 
   /* ---- 畫面 ---- */
   static uint32_t lastDraw = 0;
-  if (now - lastDraw >= OLED_REFRESH_MS) { lastDraw = now; render(); }
+  /* 0.19M：上一個畫面的 8 頁畫完才開始下一個畫面；每圈只畫一頁 */
+  if (!rd.active && now - lastDraw >= OLED_REFRESH_MS) { lastDraw = now; renderBegin(); }
+  renderStep();
 
 #if TELEMETRY_MS
   static uint32_t lastTel = 0;
