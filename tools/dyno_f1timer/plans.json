@@ -1,6 +1,6 @@
 {
  "source": "ems_head_unit_mega.ino",
- "fw_version": "0.19M",
+ "fw_version": "0.20M",
  "constants": {
   "PLAN_REST_SEQ": 1,
   "PLAN_MARGIN_S": 30,

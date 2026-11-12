@@ -66,7 +66,7 @@
 #include <stdarg.h>
 
 /* ==================== 設定 ==================== */
-#define FW_VERSION "0.19" FW_BOARD  // 顯示在待機畫面上，回報問題時用來對版本；0.8M 加 SLOWDN / ZDWELL；
+#define FW_VERSION "0.20" FW_BOARD  // 顯示在待機畫面上，回報問題時用來對版本；0.8M 加 SLOWDN / ZDWELL；
                                    // 0.9M：斷線逾時自動中止＋歸零、SET_CONTROL 收 ACK 才算數、SEQ DONE 自動 STOP、序列不受按鍵擋推送
                                    // 0.10M：SET 0 失敗仍送 STOP、BAD_STATE / 已停止就結束歸零、RX 斷時盲送 STOP、斷線暫停計時
                                    // 0.11M：串接計畫 60A / 60B / COMP（段間休息 300 s、對齊功率機的組）、遙測 S 行加 plan 欄位
@@ -81,6 +81,7 @@
                                    // 0.18M：每 5 秒重問 SYSTEM_INFO，VIN 才會持續更新（以前靠假 LINK UP 順便問）
                                    // 0.19M：OLED 改成每圈主迴圈只畫一頁、只畫落在該頁的那幾行（主迴圈 175 ms → 數十 ms 內，
                                    //        重繪中不再久久才讀一次串口）；待機畫面第 4 行顯示收包統計；定時問 VIN 不蓋掉畫面訊息
+                                   // 0.20M：省 RAM 81 bytes（UNO 用）—— RPM 波形緩衝改成每筆 4 bit；畫面訊息行直接畫 msg 不另存一份
 #define EMS_BAUD          19200   // 通訊協定 §2
 #define TELEM_BAUD       115200   // D0/D1 遙測輸出速率
 #define OLED_ADDR          0x3C
@@ -279,7 +280,13 @@ static uint32_t rpmSamples = 0;
   縱軸以目前的 rpmMax 自動縮放，所以看的是相對形狀而非絕對值。
 */
 #define TRACE_W 120
-static uint8_t traceBuf[TRACE_W];      // 已縮放到 0..15
+/* 0.20M：每筆只有 0..15，兩筆擠一個 byte（120 → 60 bytes） */
+static uint8_t traceBuf[TRACE_W / 2];
+static uint8_t traceGet(uint8_t i) { uint8_t b = traceBuf[i >> 1]; return (i & 1) ? (uint8_t)(b >> 4) : (uint8_t)(b & 0x0F); }
+static void    tracePut(uint8_t i, uint8_t v) {
+  uint8_t b = traceBuf[i >> 1];
+  traceBuf[i >> 1] = (i & 1) ? (uint8_t)((b & 0x0F) | (uint8_t)(v << 4)) : (uint8_t)((b & 0xF0) | (v & 0x0F));
+}
 static uint8_t traceIdx = 0;
 static bool    traceFull = false;
 
@@ -817,7 +824,7 @@ static void onFrame(uint8_t cmd, const uint8_t *d, uint8_t n) {
 
     /* 存進波形緩衝。以 rpmMax 自動縮放，新的最大值出現時舊資料的比例會偏高，
        但那正好把「之前看起來很大的東西其實不算大」表現出來，不需要重算整段。 */
-    traceBuf[traceIdx] = rpmMax ? (uint8_t)((uint32_t)sr.rpm * 15 / rpmMax) : 0;
+    tracePut(traceIdx, rpmMax ? (uint8_t)((uint32_t)sr.rpm * 15 / rpmMax) : 0);
     if (++traceIdx >= TRACE_W) { traceIdx = 0; traceFull = true; }
 #if RPM_TRACE
     /* 每一筆 STATUS 都吐一行原始 RPM（10Hz），拿去存檔分析飄動的形狀 */
@@ -1161,7 +1168,7 @@ static void drawTrace(uint8_t y0, uint8_t h) {
   uint8_t n = traceFull ? TRACE_W : traceIdx;
   for (uint8_t k = 0; k < n; k++) {
     uint8_t i = (uint8_t)((traceIdx + TRACE_W - 1 - k) % TRACE_W);
-    uint8_t v = (uint8_t)((uint16_t)traceBuf[i] * h / 15);
+    uint8_t v = (uint8_t)((uint16_t)traceGet(i) * h / 15);
     if (v) oled.drawVLine((uint8_t)(x0 + TRACE_W - 1 - k), (uint8_t)(y0 + h - v), v);
   }
   oled.drawHLine(x0, (uint8_t)(y0 + h), TRACE_W);   // 基線
@@ -1182,14 +1189,14 @@ static void stateBadge(char *out, uint8_t cap) {
 }
 
 /*
-  先把五行文字全部排好（renderBegin）再一頁一頁畫（renderStep）。
+  先把前四行文字全部排好（renderBegin）再一頁一頁畫（renderStep）。
   兩個理由：分頁模式下同一畫面會重畫 8 次，在迴圈裡 snprintf 等於算 8 遍；
   而且迴圈中間會呼叫 pumpEms()，全域狀態可能在兩個分頁之間被更新，
   直接讀全域會畫出上下半截不一致的畫面。
 */
 /* 0.19M：重繪拆成「每圈主迴圈一頁」。排好的文字放在這裡，8 頁畫完之前不會變。 */
 static struct {
-  char    L[5][21];
+  char    L[4][21];
   char    sb[8];
   int8_t  bx, msgY;
   bool    trace, active;
@@ -1266,9 +1273,6 @@ static void renderBegin() {
     snprintf_P(rd.L[3], sizeof(rd.L[3]), PSTR("FREE RAM %u"), (unsigned)ramHeadroom());
   }
 
-  strncpy(rd.L[4], msg, sizeof(rd.L[4]) - 1);
-  rd.L[4][sizeof(rd.L[4]) - 1] = 0;
-
   rd.bx = (int8_t)(128 - 6 * (int8_t)strlen(rd.sb));
   /* 有波形時訊息行往下讓，沒有就維持原位 */
   rd.trace = sr.valid && (sr.err & 0x02);
@@ -1297,7 +1301,9 @@ static void renderStep() {
   }
   if (textHit(10)) oled.drawStr(rd.bx, 10, rd.sb);
   if (rd.trace && rowHit(36, 52)) drawTrace(36, 16);
-  if (rd.L[4][0] && textHit(rd.msgY)) { oled.drawStr(0, rd.msgY, ">"); oled.drawStr(8, rd.msgY, rd.L[4]); }
+  /* 0.20M：訊息行直接畫 msg（省 21 bytes）。msg 最長 21 字 + 結尾，從 x = 8 畫起超出螢幕的部分會被裁掉，跟以前一樣。
+     畫到一半剛好換訊息時，這一行會有一個畫面（約 0.15 秒）上下半截不同，下一個畫面就正常。 */
+  if (msg[0] && textHit(rd.msgY)) { oled.drawStr(0, rd.msgY, ">"); oled.drawStr(8, rd.msgY, msg); }
   pumpEms();                         // 送這一頁（I2C）之前先把串口收乾淨
   if (oled.nextPage()) rd.page++;
   else                 rd.active = false;
