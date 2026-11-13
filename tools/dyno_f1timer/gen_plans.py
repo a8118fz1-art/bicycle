@@ -29,7 +29,8 @@ def parse_ino(path):
         raise FileNotFoundError(f"找不到 .ino：{path}（請用 --ino 指定）")
     with open(path, encoding="utf-8") as f:
         raw = f.read()
-    fw = re.search(r'^#define\s+FW_VERSION\s+"([^"]+)"', raw, re.M).group(1)
+    m = re.search(r'^#define\s+FW_VERSION\s+"([^"]+)"(\s+FW_BOARD)?', raw, re.M)
+    fw = m.group(1) + ("M" if m.group(2) else "")   # 0.16 起版本 = "數字" FW_BOARD；小程式配的是 Mega，字尾固定 M
     src = _strip_comments(raw)
     steps = {}
     for name, body in re.findall(r"static\s+constexpr\s+SeqStep\s+(SQS_\w+)\[\]\s*PROGMEM\s*=\s*\{(.*?)\};", src, re.S):

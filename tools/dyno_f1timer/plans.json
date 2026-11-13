@@ -1,6 +1,6 @@
 {
  "source": "ems_head_unit_mega.ino",
- "fw_version": "0.20M",
+ "fw_version": "0.21M",
  "constants": {
   "PLAN_REST_SEQ": 1,
   "PLAN_MARGIN_S": 30,
@@ -9,176 +9,183 @@
   "PLAN_MAX_GROUPS": 10,
   "DYNO_GROUP_MAX_S": 600
  },
- "plans_line": 448,
- "const_line": 417,
+ "plans_line": 483,
+ "const_line": 452,
  "seqs": [
   {
    "no": 1,
    "name": "REST5",
    "len_s": 300,
    "array": "SQS_REST",
-   "line": 314
+   "line": 343
   },
   {
    "no": 2,
    "name": "HOLD5",
    "len_s": 480,
    "array": "SQS_HOLD",
-   "line": 315
+   "line": 344
   },
   {
    "no": 3,
    "name": "PATH-A",
    "len_s": 220,
    "array": "SQS_PTHA",
-   "line": 317
+   "line": 346
   },
   {
    "no": 4,
    "name": "PATH-B",
    "len_s": 230,
    "array": "SQS_PTHB",
-   "line": 319
+   "line": 348
   },
   {
    "no": 5,
    "name": "REV-A",
    "len_s": 190,
    "array": "SQS_REVA",
-   "line": 321
+   "line": 350
   },
   {
    "no": 6,
    "name": "REV-B",
    "len_s": 110,
    "array": "SQS_REVB",
-   "line": 323
+   "line": 352
   },
   {
    "no": 7,
    "name": "UP0-70",
    "len_s": 350,
    "array": "SQS_UP",
-   "line": 325
+   "line": 354
   },
   {
    "no": 8,
    "name": "UP80+",
    "len_s": 160,
    "array": "SQS_UPHI",
-   "line": 327
+   "line": 356
   },
   {
    "no": 9,
    "name": "DN100",
    "len_s": 440,
    "array": "SQS_D100",
-   "line": 329
+   "line": 358
   },
   {
    "no": 10,
    "name": "DN80",
    "len_s": 380,
    "array": "SQS_D80",
-   "line": 332
+   "line": 361
   },
   {
    "no": 11,
    "name": "DN60",
    "len_s": 310,
    "array": "SQS_D60",
-   "line": 334
+   "line": 363
   },
   {
    "no": 12,
    "name": "DN40",
    "len_s": 230,
    "array": "SQS_D40",
-   "line": 336
+   "line": 365
   },
   {
    "no": 13,
    "name": "DIP.5",
    "len_s": 220,
    "array": "SQS_DP05",
-   "line": 339
+   "line": 368
   },
   {
    "no": 14,
    "name": "DIP1",
    "len_s": 220,
    "array": "SQS_DP1",
-   "line": 340
+   "line": 369
   },
   {
    "no": 15,
    "name": "DIP2",
    "len_s": 220,
    "array": "SQS_DP2",
-   "line": 341
+   "line": 370
   },
   {
    "no": 16,
    "name": "DIP5",
    "len_s": 220,
    "array": "SQS_DP5",
-   "line": 342
+   "line": 371
   },
   {
    "no": 17,
    "name": "SLOWDN",
    "len_s": 440,
    "array": "SQS_SLOW",
-   "line": 343
+   "line": 372
   },
   {
    "no": 18,
    "name": "ZDWELL",
    "len_s": 390,
    "array": "SQS_ZDWL",
-   "line": 350
+   "line": 379
   },
   {
    "no": 19,
    "name": "UP0-80",
    "len_s": 265,
    "array": "SQS_U80Q",
-   "line": 360
+   "line": 389
   },
   {
    "no": 20,
    "name": "DN80Q",
    "len_s": 265,
    "array": "SQS_D80Q",
-   "line": 362
+   "line": 391
   },
   {
    "no": 21,
    "name": "DN60Q",
    "len_s": 215,
    "array": "SQS_D60Q",
-   "line": 364
+   "line": 393
   },
   {
    "no": 22,
    "name": "DN40Q",
    "len_s": 165,
    "array": "SQS_D40Q",
-   "line": 366
+   "line": 395
   },
   {
    "no": 23,
    "name": "UP0-50",
    "len_s": 190,
    "array": "SQS_U50Q",
-   "line": 370
+   "line": 399
   },
   {
    "no": 24,
    "name": "CAL50",
    "len_s": 300,
    "array": "SQS_CAL50",
-   "line": 375
+   "line": 404
+  },
+  {
+   "no": 25,
+   "name": "CAL25",
+   "len_s": 390,
+   "array": "SQS_CAL25",
+   "line": 409
   }
  ],
  "plans": {

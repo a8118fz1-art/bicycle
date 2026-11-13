@@ -66,7 +66,7 @@
 #include <stdarg.h>
 
 /* ==================== 設定 ==================== */
-#define FW_VERSION "0.20" FW_BOARD  // 顯示在待機畫面上，回報問題時用來對版本；0.8M 加 SLOWDN / ZDWELL；
+#define FW_VERSION "0.21" FW_BOARD  // 顯示在待機畫面上，回報問題時用來對版本；0.8M 加 SLOWDN / ZDWELL；
                                    // 0.9M：斷線逾時自動中止＋歸零、SET_CONTROL 收 ACK 才算數、SEQ DONE 自動 STOP、序列不受按鍵擋推送
                                    // 0.10M：SET 0 失敗仍送 STOP、BAD_STATE / 已停止就結束歸零、RX 斷時盲送 STOP、斷線暫停計時
                                    // 0.11M：串接計畫 60A / 60B / COMP（段間休息 300 s、對齊功率機的組）、遙測 S 行加 plan 欄位
@@ -82,6 +82,7 @@
                                    // 0.19M：OLED 改成每圈主迴圈只畫一頁、只畫落在該頁的那幾行（主迴圈 175 ms → 數十 ms 內，
                                    //        重繪中不再久久才讀一次串口）；待機畫面第 4 行顯示收包統計；定時問 VIN 不蓋掉畫面訊息
                                    // 0.20M：省 RAM 81 bytes（UNO 用）—— RPM 波形緩衝改成每筆 4 bit；畫面訊息行直接畫 msg 不另存一份
+                                   // 0.21M：SEQ25 CAL25（新校正基準點候選：0→25 × 3 再加 0→50 × 1，各停 30 s、歸零 60 s）
 #define EMS_BAUD          19200   // 通訊協定 §2
 #define TELEM_BAUD       115200   // D0/D1 遙測輸出速率
 #define OLED_ADDR          0x3C
@@ -402,6 +403,11 @@ static constexpr SeqStep SQS_U50Q[] PROGMEM = {  // 上升到 50（190 秒）
    全長 300 秒，功率機一組就錄得完（F2 → 穩定後 F1 + * → SEQ DONE 後 F1）。 */
 static constexpr SeqStep SQS_CAL50[] PROGMEM = {
   {0,30,0},{500,30,0},{0,60,0},{500,30,0},{0,60,0},{500,30,0},{0,60,0} };
+/* 0.21M：校正基準點改到常用範圍中間的候選（2026-11-13 討論：常用 100～500 W，60 rpm duty 25 約 300 W）。
+   0→25 停 30 秒、歸零 60 秒，做 3 次；最後加一次 0→50 當檢查點（跟 CAL50 同一點，可對照舊記錄）。
+   每次都從 0 直接上去。全長 390 秒，功率機一組錄得完。CAL50（SEQ24）保留不動。 */
+static constexpr SeqStep SQS_CAL25[] PROGMEM = {
+  {0,30,0},{250,30,0},{0,60,0},{250,30,0},{0,60,0},{250,30,0},{0,60,0},{500,30,0},{0,60,0} };
 
 struct SeqDef { const char *name; const SeqStep *steps; uint8_t n; };
 static const char SN1[]  PROGMEM = "REST5";  static const char SN2[]  PROGMEM = "HOLD5";
@@ -416,6 +422,7 @@ static const char SN17[] PROGMEM = "SLOWDN"; static const char SN18[] PROGMEM = 
 static const char SN19[] PROGMEM = "UP0-80"; static const char SN20[] PROGMEM = "DN80Q";
 static const char SN21[] PROGMEM = "DN60Q";  static const char SN22[] PROGMEM = "DN40Q";
 static const char SN23[] PROGMEM = "UP0-50"; static const char SN24[] PROGMEM = "CAL50";
+static const char SN25[] PROGMEM = "CAL25";
 #define SQN(a) (uint8_t)(sizeof(a) / sizeof(a[0]))
 #define SQ(n, a) { n, a, SQN(a) }
 static constexpr SeqDef SEQS[] PROGMEM = {
@@ -425,7 +432,7 @@ static constexpr SeqDef SEQS[] PROGMEM = {
   SQ(SN13, SQS_DP05), SQ(SN14, SQS_DP1), SQ(SN15, SQS_DP2), SQ(SN16, SQS_DP5),
   SQ(SN17, SQS_SLOW), SQ(SN18, SQS_ZDWL),
   SQ(SN19, SQS_U80Q), SQ(SN20, SQS_D80Q), SQ(SN21, SQS_D60Q), SQ(SN22, SQS_D40Q),
-  SQ(SN23, SQS_U50Q), SQ(SN24, SQS_CAL50) };
+  SQ(SN23, SQS_U50Q), SQ(SN24, SQS_CAL50), SQ(SN25, SQS_CAL25) };
 #define SEQ_N SQN(SEQS)
 
 /* ==================== 串接計畫（0.11M） ====================
