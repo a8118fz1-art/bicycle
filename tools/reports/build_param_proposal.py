@@ -10,6 +10,8 @@
 import os, sys
 from datetime import date
 from openpyxl import Workbook
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import proto_examples
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -174,6 +176,18 @@ s.table(['旗標', '意義', '', ''], [
     ('超出能力', 'duty 100 仍達不到目標（ERG 或 KP），已夾到 duty 100', '', ''),
     ('磁滯補償作用中', '目前 duty 有套用補償', '', ''),
 ])
+
+s.h('五、封包範例（CRC 已實際計算）')
+s.lines("""
+　LEN = CMD + DATA 的長度；CRC16/CCITT-FALSE（init 0xFFFF、poly 0x1021）涵蓋 LEN + CMD + DATA，低位元組在前。
+　float32 與 int16 都是 little-endian。格式核對：現行 HEARTBEAT = 55 AA 01 40 FA 66 0D。
+""")
+s.table(['範例', 'CMD', 'LEN', '完整封包（hex）'], proto_examples.rows())
+s.r += 1
+s.lines("""
+　GET_VERSION（0x20）回應新格式：DATA = major minor patch 參數CRC_lo 參數CRC_hi（LEN 由 4 變 6）。
+　參數 CRC = 參數 0～9（各 4 byte float32，依編號順序）+ 磁滯表 5 行（各 18 byte）共 130 byte 的 CRC16/CCITT-FALSE。
+""")
 
 # ==================== 4 出廠校正流程 ====================
 s5 = Sheet('4_出廠校正流程', (14, 30, 30, 36))
