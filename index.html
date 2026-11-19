@@ -173,6 +173,13 @@
       <div><label>FORMULA</label><b id="threeStepFormula">--</b><small>rpm = a × kp + b</small></div>
       <div><label>STATUS</label><b id="threeStepCalcStatus">--</b><small>actual data only</small></div>
     </div>
+    <div class="result-cards five" id="threeStepTrainingCards">
+      <div><label>HIGH INTENSITY</label><b id="threeStepTrainHigh">--</b><small>kp（最大功率點 KP）</small></div>
+      <div><label>HIGH INTENSITY ②</label><b id="threeStepTrainHigh2">--</b><small>kp（體重 × 0.125）</small></div>
+      <div><label>MODERATE POWER</label><b id="threeStepTrainMid">--</b><small>kp（高強度 × 0.6）</small></div>
+      <div><label>MODERATE POWER ②</label><b id="threeStepTrainMid2">--</b><small>kp（體重 × 0.077）</small></div>
+      <div><label>BODY WEIGHT</label><b id="threeStepTrainWeight">--</b><small>kg</small></div>
+    </div>
     <div class="chart-grid two">
       <div class="chart-card">
         <h2>RPM vs KP <small>(Regression Line)</small></h2>
@@ -182,8 +189,8 @@
         </svg>
       </div>
       <div class="chart-card">
-        <h2>POWER CURVE <small>(ENERGY EFFICIENCY INDEX)</small></h2>
-        <p>watt = kp × rpm × 0.98<br>(Calculated every 0.1 kp up to 13.0 kp)</p>
+        <h2>POWER CURVE</h2>
+        <p>watt = kp × rpm × 1.026（1 kp = 9.8 N·m）<br>(Calculated every 0.1 kp, 0.0–13.0 kp)</p>
         <svg id="threeStepPowerChart" viewBox="0 0 520 300" class="chart-svg">
           <text x="160" y="150">No valid RPM data</text>
           <text x="18" y="35">watt</text><text x="480" y="275">kp</text>
@@ -214,7 +221,7 @@
     </div>
     <div class="note-panel">
       <span>• Test time = 30 sec all-out pedaling</span>
-      <span>• Watt uses validated live display source</span>
+      <span>• Watt = 下控 est_watt（每秒平均）</span>
       <span>• Load = Body Weight × 7.5%</span>
     </div>
   </section>
@@ -263,7 +270,7 @@
       <div><label>REST</label><b>20</b><span>sec</span></div>
     </div>
     <div class="data-table">
-      <h2>DATA <small>(Average RPM during each 5 sec sprint only)</small></h2>
+      <h2>DATA <small>(Average during each 5 sec sprint only)</small></h2>
       <table><thead><tr><th>ROUND</th><th>KP</th><th>AVG RPM</th><th>AVG WATT</th><th>SAMPLES</th></tr></thead>
       <tbody id="interDataBody">
         <tr><td>1</td><td>--</td><td>--</td><td>--</td><td>--</td></tr>
@@ -284,14 +291,14 @@
   <section class="page" id="pageIntermittentResult">
     <header><button class="back-btn" data-page="intermittent">←</button><h1>INTERMITTENT TEST RESULT</h1><button class="profile-mini">PROFILE</button></header>
     <div class="summary-row">
-      <div><label>LOAD</label><b id="interResultKp">--</b><small>KP</small></div>
       <div><label>PEAK POWER</label><b id="interPeakPower">--</b><small>WATT</small></div>
       <div><label>AVERAGE POWER</label><b id="interAveragePower">--</b><small>WATT</small></div>
-      <div><label>LOWEST POWER</label><b id="interLowestPower">--</b><small>WATT</small></div>
-      <div><label>STATUS</label><b id="interResultStatus">--</b><small>actual data only</small></div>
+      <div class="orange"><label>FATIGUE INDEX</label><b id="interFatigueIndex">--</b><small>% (Peak − Final) / Peak</small></div>
+      <div><label>MAX RPM</label><b id="interMaxRpm">--</b><small>rpm</small></div>
+      <div><label>TOTAL WORK</label><b id="interTotalWork">--</b><small>kJ（WORK only，暫定）</small></div>
     </div>
     <div class="chart-card full intermittent-result-chart">
-      <h2>AVERAGE POWER PER ROUND <small>(5 sec sprint actual watt average)</small></h2>
+      <h2>POWER OUTPUT PER ROUND <small>LOAD <span id="interResultKp">--</span> kp · <span id="interResultStatus">--</span></small></h2>
       <div class="bar-chart" id="interBarChart">
         <div style="--h:0"><b>--</b><span>1</span></div><div style="--h:0"><b>--</b><span>2</span></div>
         <div style="--h:0"><b>--</b><span>3</span></div><div style="--h:0"><b>--</b><span>4</span></div>
@@ -337,8 +344,8 @@
 
 <script src="./uart.js?v=16.55-eebccf28"></script>
 <script src="./uart_session.js?v=16.55-8f924308"></script>
-<script src="./app.js?v=16.55-b02ece43"></script>
-<script src="./ui.js?v=16.55-56678730"></script>
+<script src="./app.js?v=16.55-0163d48e"></script>
+<script src="./ui.js?v=16.55-0d6eb5d3"></script>
 <script>
   (function(){
     function pad(n){return String(n).padStart(2,'0');}

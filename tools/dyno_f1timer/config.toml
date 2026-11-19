@@ -1,0 +1,8 @@
+# dyno_f1timer 設定檔（Mega FW 0.11M 計畫）
+title_re = "^C271-01-D7-.*06P$"   # 功率機主視窗標題 regex（必須剛好符合 1 個視窗）
+log_file = "f1timer.log"          # 相對路徑 = 本程式資料夾
+plans_file = "plans.json"         # gen_plans.py 由 .ino 產生，不要手改
+# 記錄頁（head_unit_logger_0.11M.html）「選擇狀態檔」存的位置；每 1 s 覆寫一次
+status_file = "D:/EMS_LOG/mega_status.json"
+status_stale_s = 3                # 狀態檔超過幾秒沒更新 → 暫停送 F1、等恢復後補送（不停止）
+activate_lead_s = 8               # 送 F1 前幾秒先把功率機切到前景

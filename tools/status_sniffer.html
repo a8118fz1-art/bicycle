@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>下控 STATUS 監聽</title>
+<style>
+:root { --bg:#f7f8fa; --card:#fff; --fg:#1d2330; --mute:#667085; --line:#d9dee7; --ok:#1a7f37; --bad:#c62828; --warn:#b26a00; --acc:#1f5fbf; }
+@media (prefers-color-scheme: dark) { :root { --bg:#14171c; --card:#1d2128; --fg:#e6e9ef; --mute:#9aa4b2; --line:#323844; --ok:#4cc26a; --bad:#ff6b6b; --warn:#f0a83a; --acc:#6ea8ff; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 "Microsoft JhengHei", system-ui, sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.sub { color: var(--mute); font-size: 13px; margin-bottom: 12px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
+button.pri { background: var(--acc); border-color: var(--acc); color: #fff; }
+button:disabled { opacity: .45; cursor: default; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.kv { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+.kv .k { color: var(--mute); font-size: 12px; }
+.kv .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+#verdict { font-size: 16px; font-weight: 700; }
+canvas { width: 100%; height: 220px; display: block; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 13px; }
+th, td { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: right; }
+th:first-child, td:first-child { text-align: left; }
+.scroll { max-height: 260px; overflow: auto; }
+details summary { cursor: pointer; font-weight: 700; }
+ol, ul { margin: 6px 0 6px 20px; padding: 0; }
+.mono { font-family: Consolas, monospace; }
+</style>
+</head>
+<body>
+<main>
+<h1>下控 STATUS 監聽</h1>
+<div class="sub">USB 轉 TTL 只接下控 TX + GND，直接記錄下控送出的每一筆封包時間。只收不送，不影響上控運作。需用 Chrome / Edge。</div>
+
+<div class="card">
+  <details>
+    <summary>接線方式（先看這裡）</summary>
+    <ol>
+      <li>USB 轉 TTL 模組的 <b>RX</b> → 接到 <b>下控 TX</b>（就是原本接到上控 RX 的那條線，並聯夾上去即可，上控照常接著）。</li>
+      <li>模組 <b>GND</b> → 下控 <b>GND</b>。</li>
+      <li>模組的 <b>TX、VCC 都不要接</b>。</li>
+      <li>電壓：先用電表量下控 TX 對 GND（閒置時）。約 5 V → 模組跳線設 5 V；約 3.3 V → 設 3.3 V 或 5 V 都可以。</li>
+      <li>按「連線」選模組的 COM port（19200 bps 固定）。正常會看到 STATUS 約 10 筆／秒。</li>
+      <li>建議錄 <b>10 分鐘以上</b>，待機和踩踏各錄一段，然後按「下載 CSV」傳給 LQ。</li>
+    </ol>
+  </details>
+</div>
+
+<div class="card row">
+  <button id="btnConn" class="pri">連線</button>
+  <button id="btnStop" disabled>停止</button>
+  <button id="btnReset">統計歸零</button>
+  <button id="btnCsv" disabled>下載 CSV</button>
+  <span id="conn" class="sub" style="margin:0">未連線</span>
+</div>
+
+<div class="card">
+  <div id="verdict" class="sub" style="margin:0 0 8px">尚無資料</div>
+  <div class="grid">
+    <div class="kv"><div class="k">錄製時間</div><div class="v" id="kTime">0:00</div></div>
+    <div class="kv"><div class="k">STATUS 筆數</div><div class="v" id="kCnt">0</div></div>
+    <div class="kv"><div class="k">平均頻率</div><div class="v" id="kHz">–</div></div>
+    <div class="kv"><div class="k">最大間隔</div><div class="v" id="kMax">–</div></div>
+    <div class="kv"><div class="k">間隔 &gt; 200 ms</div><div class="v" id="k200">0</div></div>
+    <div class="kv"><div class="k">空窗 &gt; 300 ms</div><div class="v" id="k300">0</div></div>
+    <div class="kv"><div class="k">空窗 &gt; 1 s</div><div class="v" id="k1000">0</div></div>
+    <div class="kv"><div class="k">空窗平均週期</div><div class="v" id="kPer">–</div></div>
+    <div class="kv"><div class="k">CRC 錯誤</div><div class="v" id="kCrc">0</div></div>
+    <div class="kv"><div class="k">其他封包</div><div class="v" id="kOther">0</div></div>
+    <div class="kv"><div class="k">即時 飛輪 rpm</div><div class="v" id="kRpm">–</div></div>
+    <div class="kv"><div class="k">即時 watt</div><div class="v" id="kW">–</div></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="sub" style="margin:0 0 4px">STATUS 間隔（ms），最近 60 秒；紅線 = 300 ms</div>
+  <canvas id="cv" width="1060" height="220"></canvas>
+</div>
+
+<div class="card">
+  <div class="sub" style="margin:0 0 4px">空窗清單（&gt; 300 ms）</div>
+  <div class="scroll"><table>
+    <thead><tr><th>#</th><th>開始（s）</th><th>空窗長度（ms）</th><th>距上一次空窗（s）</th><th>空窗前 rpm</th><th>空窗前 watt</th></tr></thead>
+    <tbody id="gaps"></tbody>
+  </table></div>
+</div>
+
+<div class="card sub" style="margin-bottom:0">
+  判讀：這裡看到空窗 → 下控本身停送（下控問題）；這裡完全沒有空窗、但上控記錄頁有 LINK LOST → 問題在上控接收端。
+  時間精度約 ±20 ms（USB 轉 TTL 會把資料分批送進電腦），判斷 300 ms 以上的空窗足夠。
+</div>
+</main>
+
+<script>
+'use strict';
+const BAUD = 19200, CMD_STATUS = 0x80, GAP_MS = 300;
+const $ = id => document.getElementById(id);
+
+let port = null, reader = null, running = false;
+let t0 = 0, rows = [], stats, parse;
+
+function resetStats() {
+  stats = { n: 0, last: null, maxIv: 0, c200: 0, c300: 0, c1000: 0, crc: 0, other: 0, gaps: [], ivs: [], lastRpm: null, lastW: null, first: null };
+  rows = [];
+  parse = { st: 0, len: 0, buf: [], crc: 0 };
+  t0 = performance.now();
+  $('gaps').innerHTML = '';
+  render();
+}
+
+function crc16(bytes) {
+  let c = 0xFFFF;
+  for (const b of bytes) {
+    c ^= b << 8;
+    for (let i = 0; i < 8; i++) c = (c & 0x8000) ? ((c << 1) ^ 0x1021) & 0xFFFF : (c << 1) & 0xFFFF;
+  }
+  return c;
+}
+const rd16 = (d, o) => d[o] | (d[o + 1] << 8);
+
+function onFrame(buf, crcOk, t) {
+  const cmd = buf[1], d = buf.slice(2);
+  const hex = buf.map(b => b.toString(16).padStart(2, '0')).join(' ');
+  if (!crcOk) { stats.crc++; rows.push([t.toFixed(1), '', hex.slice(3, 5), buf[0], 0, '', '', '', '', '', '', '', hex]); return; }
+  if (cmd !== CMD_STATUS || d.length < 13) { stats.other++; rows.push([t.toFixed(1), '', cmd.toString(16), buf[0], 1, '', '', '', '', '', '', '', hex]); return; }
+
+  const s = { rpm: rd16(d, 0), mA: rd16(d, 2), w: rd16(d, 4), duty: rd16(d, 6) / 10, tgt: rd16(d, 8), mode: d[10], flags: d[11], err: d.length >= 14 ? rd16(d, 12) : d[12] };
+  let iv = '';
+  if (stats.last !== null) {
+    iv = t - stats.last;
+    stats.ivs.push([t, iv]);
+    if (iv > stats.maxIv) stats.maxIv = iv;
+    if (iv > 200) stats.c200++;
+    if (iv > GAP_MS) {
+      stats.c300++;
+      if (iv > 1000) stats.c1000++;
+      const prev = stats.gaps.length ? stats.gaps[stats.gaps.length - 1].start : null;
+      const g = { start: stats.last, len: iv, since: prev === null ? null : stats.last - prev, rpm: stats.lastRpm, w: stats.lastW };
+      stats.gaps.push(g);
+      addGapRow(g, stats.gaps.length);
+    }
+  } else stats.first = t;
+  stats.last = t; stats.n++; stats.lastRpm = s.rpm; stats.lastW = s.w;
+  rows.push([t.toFixed(1), iv === '' ? '' : iv.toFixed(1), '80', buf[0], 1, s.rpm, s.mA, s.w, s.duty, s.tgt, s.flags, s.err, hex]);
+}
+
+function feed(b, t) {
+  const p = parse;
+  switch (p.st) {
+    case 0: if (b === 0x55) p.st = 1; break;
+    case 1: p.st = b === 0xAA ? 2 : (b === 0x55 ? 1 : 0); break;
+    case 2: if (b === 0 || b > 60) { p.st = 0; break; } p.len = b; p.buf = [b]; p.st = 3; break;
+    case 3: p.buf.push(b); if (p.buf.length >= 1 + p.len) p.st = 4; break;
+    case 4: p.crc = b; p.st = 5; break;
+    case 5: p.crc |= b << 8; p.st = 6; break;
+    case 6:
+      if (b === 0x0D) onFrame(p.buf, crc16(p.buf) === p.crc, t);
+      p.st = 0; break;
+  }
+}
+
+function addGapRow(g, i) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${i}</td><td>${(g.start / 1000).toFixed(2)}</td><td class="bad">${g.len.toFixed(0)}</td>` +
+    `<td>${g.since === null ? '–' : (g.since / 1000).toFixed(2)}</td><td>${g.rpm ?? '–'}</td><td>${g.w ?? '–'}</td>`;
+  $('gaps').appendChild(tr);
+}
+
+function fmtTime(ms) { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
+
+function render() {
+  const el = running ? performance.now() - t0 : (stats.last ?? 0);
+  $('kTime').textContent = fmtTime(el);
+  $('kCnt').textContent = stats.n;
+  const span = stats.last !== null && stats.first !== null ? stats.last - stats.first : 0;
+  $('kHz').textContent = span > 1000 ? ((stats.n - 1) / span * 1000).toFixed(2) + ' Hz' : '–';
+  $('kMax').textContent = stats.n > 1 ? stats.maxIv.toFixed(0) + ' ms' : '–';
+  $('kMax').className = 'v ' + (stats.maxIv > GAP_MS ? 'bad' : stats.maxIv > 200 ? 'warn' : stats.n > 1 ? 'ok' : '');
+  $('k200').textContent = stats.c200;
+  $('k300').textContent = stats.c300; $('k300').className = 'v ' + (stats.c300 ? 'bad' : 'ok');
+  $('k1000').textContent = stats.c1000; $('k1000').className = 'v ' + (stats.c1000 ? 'bad' : 'ok');
+  const sp = stats.gaps.filter(g => g.since !== null).map(g => g.since);
+  $('kPer').textContent = sp.length ? (sp.reduce((a, b) => a + b, 0) / sp.length / 1000).toFixed(2) + ' s' : '–';
+  $('kCrc').textContent = stats.crc;
+  $('kOther').textContent = stats.other;
+  $('kRpm').textContent = stats.lastRpm ?? '–';
+  $('kW').textContent = stats.lastW ?? '–';
+
+  const v = $('verdict');
+  if (stats.n < 20) { v.textContent = running ? '收集中…（若一直沒有資料：檢查接線、COM port、模組電壓）' : '尚無資料'; v.className = 'sub'; }
+  else if (stats.c300) { v.textContent = `下控 TX 本身有空窗：${stats.c300} 次 > 300 ms，最長 ${stats.maxIv.toFixed(0)} ms → 問題在下控`; v.className = 'bad'; }
+  else { v.textContent = `目前下控 TX 無空窗（最大間隔 ${stats.maxIv.toFixed(0)} ms），錄滿 10 分鐘再判定`; v.className = 'ok'; }
+  draw();
+}
+
+function draw() {
+  const cv = $('cv'), g = cv.getContext('2d'), W = cv.width, H = cv.height;
+  const css = getComputedStyle(document.documentElement);
+  g.clearRect(0, 0, W, H);
+  const now = stats.last ?? 0, from = now - 60000, maxY = Math.max(500, Math.min(2000, stats.maxIv * 1.1));
+  const X = t => 40 + (t - from) / 60000 * (W - 50), Y = v => H - 20 - v / maxY * (H - 30);
+  g.font = '11px sans-serif'; g.fillStyle = css.getPropertyValue('--mute'); g.strokeStyle = css.getPropertyValue('--line');
+  for (const yv of [0, 100, 300, 500, 1000, 1500, 2000]) if (yv <= maxY) { g.beginPath(); g.moveTo(40, Y(yv)); g.lineTo(W - 10, Y(yv)); g.stroke(); g.fillText(yv, 4, Y(yv) + 4); }
+  g.strokeStyle = css.getPropertyValue('--bad'); g.beginPath(); g.moveTo(40, Y(GAP_MS)); g.lineTo(W - 10, Y(GAP_MS)); g.stroke();
+  g.strokeStyle = css.getPropertyValue('--acc'); g.lineWidth = 1.5; g.beginPath();
+  let started = false;
+  for (const [t, iv] of stats.ivs) { if (t < from) continue; const x = X(t), y = Y(Math.min(iv, maxY)); if (!started) { g.moveTo(x, y); started = true; } else g.lineTo(x, y); }
+  g.stroke(); g.lineWidth = 1;
+  if (stats.ivs.length > 20000) stats.ivs.splice(0, stats.ivs.length - 20000);
+}
+
+async function connect() {
+  if (!('serial' in navigator)) { alert('這個瀏覽器不支援 Web Serial，請用 Chrome 或 Edge。'); return; }
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: BAUD, dataBits: 8, stopBits: 1, parity: 'none', bufferSize: 4096 });
+  } catch (e) { $('conn').textContent = '連線失敗：' + e.message; return; }
+  resetStats(); running = true;
+  $('btnConn').disabled = true; $('btnStop').disabled = false; $('btnCsv').disabled = false;
+  $('conn').textContent = '已連線，監聽中（19200 8N1，只收不送）';
+  readLoop();
+}
+
+async function readLoop() {
+  while (running && port.readable) {
+    reader = port.readable.getReader();
+    try {
+      while (running) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const t = performance.now() - t0;
+        for (const b of value) feed(b, t);
+      }
+    } catch (e) { $('conn').textContent = '讀取中斷：' + e.message; }
+    finally { reader.releaseLock(); }
+  }
+}
+
+async function stop() {
+  running = false;
+  try { if (reader) await reader.cancel(); } catch (e) {}
+  try { if (port) await port.close(); } catch (e) {}
+  $('btnConn').disabled = false; $('btnStop').disabled = true;
+  $('conn').textContent = '已停止（資料保留，可下載 CSV）';
+  render();
+}
+
+function downloadCsv() {
+  const head = ['t_ms', 'interval_ms', 'cmd_hex', 'len', 'crc_ok', 'rpm_flywheel', 'mA', 'watt', 'duty', 'target', 'flags', 'err', 'raw_hex'];
+  const summary = [
+    `# 下控 STATUS 監聽 ${new Date().toLocaleString()}`,
+    `# STATUS=${stats.n} max_interval_ms=${stats.maxIv.toFixed(0)} gt200=${stats.c200} gaps_gt300=${stats.c300} gaps_gt1000=${stats.c1000} crc_err=${stats.crc} other=${stats.other}`,
+  ];
+  const csv = summary.concat([head.join(',')], rows.map(r => r.join(','))).join('\r\n');
+  const a = document.createElement('a');
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' }));
+  a.download = `sniff_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+$('btnConn').onclick = connect;
+$('btnStop').onclick = stop;
+$('btnReset').onclick = () => { resetStats(); };
+$('btnCsv').onclick = downloadCsv;
+resetStats();
+setInterval(() => { if (running) render(); }, 250);
+</script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+# Windows 執行需要（Linux 測試只需 Python 3.11+ 標準函式庫）
+pywinauto>=0.6.8; sys_platform == "win32"
+pywin32>=306; sys_platform == "win32"
+Pillow>=10.0; sys_platform == "win32"   # 只有 stop.method = "pixel" 才用到
