@@ -1,5 +1,5 @@
 /*
- * EMS Bike 下控 參考程式：第六版模型 + 可寫入參數 + 磁滯補償
+ * EMS Bike 下控 參考程式（簡化版）：第六版模型 + 可寫入參數 + 磁滯補償公式
  *
  * 給下控廠商參考的計算部分，不含 UART 收發與 flash 驅動。
  * 只用 float 與 sqrtf，可直接放進 MCU 專案。
@@ -8,11 +8,9 @@
 #include <stdint.h>
 #include <math.h>
 
-#define RATIO      15.0119f   /* 飛輪 RPM / 踏頻 = 52/16 × 97/21 */
-#define KP_NM      9.8f       /* 1 kp = 9.8 N·m 淨扭力 */
-#define N_PARAM    10
-#define HYST_ROWS  5          /* 最高 duty 20 / 40 / 60 / 80 / 100 */
-#define HYST_COLS  9          /* 目前 duty 10 ~ 90 */
+#define RATIO    15.0119f   /* 飛輪 RPM / 踏頻 = 52/16 × 97/21 */
+#define KP_NM    9.8f       /* 1 kp = 9.8 N·m 淨扭力 */
+#define N_PARAM  9
 
 /* ---------- 參數（存 flash；開機讀入，損壞則用預設值） ---------- */
 enum {
@@ -22,37 +20,23 @@ enum {
     P_C0,           /* c0：轉速影響 */
     P_T0,           /* tare 常數 N·m */
     P_T1,           /* tare 斜率 N·m / 踏頻 */
-    P_GAIN,         /* 扭力倍率：每台出廠校正 */
-    P_TARE_OFS,     /* 空載補正 N·m */
-    P_HYST_RESET_S, /* duty 0 維持超過此秒數，清除最高 duty 記錄 */
-    P_HYST_EN       /* 磁滯補償開關：0 關 / 1 開 */
+    P_GAIN,         /* 扭力倍率：每台出廠校正（VR1 粗調後的細調） */
+    P_HYST_K,       /* 磁滯係數 k；0 = 關閉補償 */
+    P_HYST_RESET_S  /* duty 0 維持超過此秒數，清除最高 duty 記錄 */
 };
 
 static const float PARAM_DEFAULT[N_PARAM] = {
-    2.374758f, 0.00899796f, 1.6251f, 12.4604f, 1.5790f, 0.010934f,
-    1.000f, 0.0f, 2.0f, 1.0f
+    2.374758f, 0.00899796f, 1.6251f, 12.4604f, 1.5790f, 0.010934f, 1.000f, 0.353f, 2.0f
 };
-static const float PARAM_MIN[N_PARAM] = { 1.0f, 0.0f,  0.0f,  1.0f, 0.0f, 0.0f,  0.80f, -3.0f,  0.5f, 0.0f };
-static const float PARAM_MAX[N_PARAM] = { 4.0f, 0.03f, 10.0f, 50.0f, 6.0f, 0.05f, 1.20f,  3.0f, 30.0f, 1.0f };
+static const float PARAM_MIN[N_PARAM] = { 1.0f, 0.0f,  0.0f,  1.0f, 0.0f, 0.0f,  0.80f, 0.0f, 0.5f };
+static const float PARAM_MAX[N_PARAM] = { 4.0f, 0.03f, 10.0f, 50.0f, 6.0f, 0.05f, 1.20f, 1.0f, 30.0f };
 
-/* 磁滯補償表：偏高量，單位 0.1%（240 = 24.0%） */
-static const int16_t HYST_DEFAULT[HYST_ROWS][HYST_COLS] = {
-    {   0,   0,  0,  0,  0, 0, 0, 0, 0 },   /* 最高 duty 20（待補測） */
-    { 219,  84,  8,  0,  0, 0, 0, 0, 0 },   /* 最高 duty 40 */
-    { 240, 149, 95, 51, 11, 0, 0, 0, 0 },   /* 最高 duty 60 */
-    {   0,   0,  0,  0,  0, 0, 0, 0, 0 },   /* 最高 duty 80（待補測） */
-    {   0,   0,  0,  0,  0, 0, 0, 0, 0 },   /* 最高 duty 100（待補測） */
-};
-
-float   param[N_PARAM];
-int16_t hyst[HYST_ROWS][HYST_COLS];
+float param[N_PARAM];
 
 void params_load_defaults(void)
 {
-    uint8_t i, j;
+    uint8_t i;
     for (i = 0; i < N_PARAM; i++) param[i] = PARAM_DEFAULT[i];
-    for (i = 0; i < HYST_ROWS; i++)
-        for (j = 0; j < HYST_COLS; j++) hyst[i][j] = HYST_DEFAULT[i][j];
 }
 
 /* SET_PARAM：回傳 ACK_RESULT（0 = ACK_OK，2 = ACK_PARAM_ERROR） */
@@ -73,7 +57,7 @@ static float speed_factor(float cad)       /* 60 踏頻時 = 1.000 */
 
 static float tare_nm(float cad)            /* duty 0 的機械阻力 */
 {
-    return param[P_T0] + param[P_T1] * cad + param[P_TARE_OFS];
+    return param[P_T0] + param[P_T1] * cad;
 }
 
 /* duty（%）→ 模型淨扭力（N·m），含倍率，不含磁滯 */
@@ -84,21 +68,19 @@ static float net_from_duty(float duty, float cad)
     return (param[P_A] * u - param[P_B] * u * u) * speed_factor(cad) * param[P_GAIN];
 }
 
-/* 淨扭力 → duty（%），閉式反解；*flag 回報觸底 / 超出 */
-#define FLAG_LIMIT   0x08   /* 沿用現有 STATUS_ERG_LIMIT：duty 100 仍達不到 */
-#define FLAG_BOTTOM  0x10   /* 新增：目標低於空載阻力 / 低於導通門檻 */
-#define FLAG_HYST    0x20   /* 新增：磁滯補償作用中 */
+#define STATUS_ERG_LIMIT 0x08   /* 原協定已有：duty 100 仍達不到（KP 也用） */
 
-static float duty_from_net(float need, float cad, uint8_t *flag)
+/* 淨扭力 → duty（%），閉式反解 */
+static float duty_from_net(float need, float cad, uint8_t *status)
 {
     float a = param[P_A], b = param[P_B], x0 = param[P_X0];
     float X, disc, d;
-    if (need <= 0.0f) { *flag |= FLAG_BOTTOM; return 0.0f; }
+    if (need <= 0.0f) return 0.0f;                         /* 低於空載阻力：duty 0 */
     X = need / (speed_factor(cad) * param[P_GAIN]);
     disc = a * a - 4.0f * b * X;
-    if (disc < 0.0f) { *flag |= FLAG_LIMIT; return 100.0f; }
+    if (disc < 0.0f) { *status |= STATUS_ERG_LIMIT; return 100.0f; }
     d = (a - sqrtf(disc)) / (2.0f * b) + x0;
-    if (d > 100.0f) { *flag |= FLAG_LIMIT; return 100.0f; }
+    if (d > 100.0f) { *status |= STATUS_ERG_LIMIT; return 100.0f; }
     return d;
 }
 
@@ -118,54 +100,40 @@ void hyst_track(float duty_out, float dt_s)
     }
 }
 
-/* 查表：回傳偏高量（0.10 = 10%）。最高 duty 與目前 duty 兩個方向線性內插 */
+/* 偏高量 h（0.10 = 10%）= k × ((最高 − 目前) / 最高)² */
 static float hyst_excess(float duty)
 {
-    float pr, cc, fr, fc, v0, v1;
-    int r, c;
-    if (param[P_HYST_EN] < 0.5f || duty >= peak_duty || duty <= 0.0f) return 0.0f;
-    pr = peak_duty / 20.0f - 1.0f;            /* 行：20→0 … 100→4 */
-    if (pr < 0.0f) pr = 0.0f;
-    if (pr > HYST_ROWS - 1) pr = HYST_ROWS - 1;
-    cc = duty / 10.0f - 1.0f;                 /* 列：10→0 … 90→8 */
-    if (cc < 0.0f) cc = 0.0f;
-    if (cc > HYST_COLS - 1) cc = HYST_COLS - 1;
-    r = (int)pr; if (r > HYST_ROWS - 2) r = HYST_ROWS - 2;
-    c = (int)cc; if (c > HYST_COLS - 2) c = HYST_COLS - 2;
-    fr = pr - r; fc = cc - c;
-    v0 = hyst[r][c]     + (hyst[r][c + 1]     - hyst[r][c])     * fc;
-    v1 = hyst[r + 1][c] + (hyst[r + 1][c + 1] - hyst[r + 1][c]) * fc;
-    return (v0 + (v1 - v0) * fr) * 0.001f;
+    float x;
+    if (duty <= 0.0f || duty >= peak_duty) return 0.0f;
+    x = (peak_duty - duty) / peak_duty;
+    return param[P_HYST_K] * x * x;
 }
 
 /* 目標淨扭力 → duty，含磁滯補償（補償一次即可） */
-static float duty_for_net(float need, float cad, uint8_t *flag)
+static float duty_for_net(float need, float cad, uint8_t *status)
 {
-    float d = duty_from_net(need, cad, flag);
+    float d = duty_from_net(need, cad, status);
     float h = hyst_excess(d);
-    if (h > 0.0f) {
-        *flag |= FLAG_HYST;
-        d = duty_from_net(need / (1.0f + h), cad, flag);
-    }
+    if (h > 0.0f) d = duty_from_net(need / (1.0f + h), cad, status);
     return d;
 }
 
 /* ---------- 對外介面 ---------- */
 /* MODE_ERG：target_w = 騎士總功率；回傳 MODE_DUTY 單位（0.1%） */
-uint16_t erg_to_duty_x10(uint16_t target_w, uint16_t flywheel_rpm, uint8_t *flag)
+uint16_t erg_to_duty_x10(uint16_t target_w, uint16_t flywheel_rpm, uint8_t *status)
 {
     float cad = flywheel_rpm / RATIO, w;
     if (cad < 1.0f) return 0;
     w = 2.0f * 3.14159265f * cad / 60.0f;
-    return (uint16_t)(duty_for_net((float)target_w / w - tare_nm(cad), cad, flag) * 10.0f + 0.5f);
+    return (uint16_t)(duty_for_net((float)target_w / w - tare_nm(cad), cad, status) * 10.0f + 0.5f);
 }
 
 /* MODE_KP：mode_kp 單位 0.1 kp；KP 不扣 tare */
-uint16_t kp_to_duty_x10(uint16_t mode_kp, uint16_t flywheel_rpm, uint8_t *flag)
+uint16_t kp_to_duty_x10(uint16_t mode_kp, uint16_t flywheel_rpm, uint8_t *status)
 {
     float cad = flywheel_rpm / RATIO;
     if (cad < 1.0f) return 0;
-    return (uint16_t)(duty_for_net(mode_kp * 0.1f * KP_NM, cad, flag) * 10.0f + 0.5f);
+    return (uint16_t)(duty_for_net(mode_kp * 0.1f * KP_NM, cad, status) * 10.0f + 0.5f);
 }
 
 /* STATUS_REPORT 的 est_watt：目前 duty 下騎士的總功率 */

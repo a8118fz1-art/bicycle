@@ -35,35 +35,22 @@ VENDOR_APPENDIX = [
     ('A-15 ACK_INVALID_STATE', 0xF0, bytes([0x01, 5]), '55 AA 03 F0 01 05 DA 9F 0D'),
 ]
 
-DEFAULT = [2.374758, 0.00899796, 1.6251, 12.4604, 1.5790, 0.010934, 1.000, 0.0, 2.0, 1.0]
-HYST = [[0] * 9, [219, 84, 8, 0, 0, 0, 0, 0, 0], [240, 149, 95, 51, 11, 0, 0, 0, 0], [0] * 9, [0] * 9]
+DEFAULT = [2.374758, 0.00899796, 1.6251, 12.4604, 1.5790, 0.010934, 1.000, 0.353, 2.0]
 
-def param_crc(params=DEFAULT, hyst=HYST):
-    """參數 CRC：參數 0～9（float32 LE，依編號）+ 磁滯表 5 行 × 9 格（int16 LE，逐行）= 130 byte"""
-    blob = b''.join(struct.pack('<f', v) for v in params) + b''.join(struct.pack('<9h', *r) for r in hyst)
-    assert len(blob) == 130
-    return crc16(blob)
-
-_pc = param_crc()
 EXAMPLES = [
     # (說明, 方向, CMD, DATA)
     ('SET_PARAM：參數 6（扭力倍率）= 1.0000', '上 → 下', 0x30, bytes([6]) + struct.pack('<f', 1.0)),
     ('　→ 成功：ACK_OK', '下 → 上', 0xF0, bytes([0x30, 0])),
     ('　→ 數值超出範圍或編號錯：ACK_PARAM_ERROR', '下 → 上', 0xF0, bytes([0x30, 2])),
     ('　→ 不在 STOP 狀態：ACK_INVALID_STATE', '下 → 上', 0xF0, bytes([0x30, 5])),
-    ('　→ 舊韌體不認得：ACK_UNKNOWN_CMD（上控據此判斷是舊版）', '下 → 上', 0xF0, bytes([0x30, 4])),
+    ('　→ 舊韌體不認得：ACK_UNKNOWN_CMD', '下 → 上', 0xF0, bytes([0x30, 4])),
     ('SET_PARAM：參數 6 = 1.0234', '上 → 下', 0x30, bytes([6]) + struct.pack('<f', 1.0234)),
     ('SET_PARAM：參數 0（a）= 2.374758', '上 → 下', 0x30, bytes([0]) + struct.pack('<f', 2.374758)),
+    ('SET_PARAM：參數 7（磁滯係數 k）= 0.353', '上 → 下', 0x30, bytes([7]) + struct.pack('<f', 0.353)),
     ('GET_PARAM：讀參數 6', '上 → 下', 0x31, bytes([6])),
     ('　→ PARAM_VALUE 回應：參數 6 = 1.0234', '下 → 上', 0x82, bytes([6]) + struct.pack('<f', 1.0234)),
     ('SAVE_PARAMS', '上 → 下', 0x32, b''),
     ('　→ 存檔完成：ACK_OK', '下 → 上', 0xF0, bytes([0x32, 0])),
-    ('LOAD_DEFAULTS', '上 → 下', 0x33, b''),
-    ('SET_HYST_ROW：第 2 行（最高 duty 60）', '上 → 下', 0x34, bytes([2]) + struct.pack('<9h', *HYST[2])),
-    ('GET_HYST_ROW：讀第 2 行', '上 → 下', 0x35, bytes([2])),
-    ('　→ HYST_ROW 回應：第 2 行', '下 → 上', 0x83, bytes([2]) + struct.pack('<9h', *HYST[2])),
-    ('GET_PARAM_CRC', '上 → 下', 0x36, b''),
-    (f'　→ PARAM_CRC 回應：第六版預設值 = 0x{_pc:04X}', '下 → 上', 0x84, struct.pack('<H', _pc)),
 ]
 
 def rows():
@@ -75,5 +62,4 @@ def verify_vendor():
 if __name__ == '__main__':
     import sys; sys.stdout.reconfigure(encoding='utf-8')
     for n, ok in verify_vendor(): print('✔' if ok else '✘', n)
-    print(f'參數 CRC 預設 = 0x{_pc:04X}')
     for r in rows(): print(*r, sep=' | ')
