@@ -23,7 +23,7 @@ import proto_examples as pe
 sys.stdout.reconfigure(encoding='utf-8')
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser(
-    f'~/Downloads/EMS Bike 下控 韌體修改規格（簡化版）_{date.today():%Y%m%d}.xlsx')
+    f'~/Downloads/EMS Bike 下控 韌體修改規格討論（簡化版）_{date.today():%Y%m%d}.xlsx')
 
 assert all(ok for _, ok in pe.verify_vendor()), '封包格式與廠商附錄不一致'
 
@@ -277,7 +277,7 @@ s.lines("""
 　1. 參數存 flash 是否可行？可寫入次數？
 　2. 指令碼 0x30～0x32、回應 0x82 是否可用？如需調整請告知。
 　3. 磁滯補償公式的實作是否有疑問？
-　4. 預估完成時間？
+　4. 如果可行，預估完成時間？
 """)
 
 wb.save(OUT)
